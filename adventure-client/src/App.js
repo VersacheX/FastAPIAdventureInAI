@@ -49,7 +49,8 @@ function App() {
       setToken(stored);
       if (storedUser) setUsername(storedUser);
     }
-    const storedGameId = localStorage.getItem('ai_current_game_id');
+    // Check for currentGameId in localStorage (set by Game.js)
+    const storedGameId = localStorage.getItem('currentGameId');
     if (storedGameId && stored) {
       axios.get(`${API_URL}/saved_games/${storedGameId}`, {
         headers: { Authorization: `Bearer ${stored}` }
@@ -60,11 +61,12 @@ function App() {
       })
       .catch(err => {
         console.error('Failed to reload game', err);
-        localStorage.removeItem('ai_current_game_id');
+        localStorage.removeItem('currentGameId');
         setLoading(false);
       });
+    } else {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -104,7 +106,7 @@ function App() {
   const handleGameLoaded = (game) => {
     if (game) {
       setCurrentGame(game);
-      localStorage.setItem('ai_current_game_id', game.id);
+      localStorage.setItem('currentGameId', game.id);
       navigate('/game');
     }
   };
@@ -112,7 +114,7 @@ function App() {
   const handleExitGame = () => {
     setCurrentGame(null);
     try {
-      localStorage.removeItem('ai_current_game_id');
+      localStorage.removeItem('currentGameId');
     } catch (err) {}
     navigate('/');
   };

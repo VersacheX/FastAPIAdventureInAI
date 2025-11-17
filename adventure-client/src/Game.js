@@ -4,6 +4,15 @@ import axios from 'axios';
 import { API_URL, AI_URL } from './config';
 
 function Game({ game, token, onExit, onLogout }) {
+    // Store current game ID in localStorage on mount
+    useEffect(() => {
+      if (game?.id) {
+        localStorage.setItem('currentGameId', game.id);
+      }
+      return () => {
+        localStorage.removeItem('currentGameId');
+      };
+    }, [game?.id]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [tokenizedOpen, setTokenizedOpen] = useState(false);
   const [deepMemoryOpen, setDeepMemoryOpen] = useState(false);
@@ -75,7 +84,7 @@ function Game({ game, token, onExit, onLogout }) {
   useEffect(() => {
     const stats = calculateTokenStats();
     setTokenStats(stats);
-  }, [localHistory, localTokenized, calculateTokenStats, setTokenStats ]);
+  }, [localHistory, localTokenized]);
 
   // Scroll to bottom whenever history changes
   useEffect(() => {
@@ -485,8 +494,16 @@ function Game({ game, token, onExit, onLogout }) {
           </button>
           {menuOpen && (
             <div className="menu-dropdown">
-              <button className="menu-dropdown-item" onClick={() => { setMenuOpen(false); navigate('/'); }}>Main</button>
-              <button className="menu-dropdown-item" onClick={() => { setMenuOpen(false); onLogout(); }}>Logout</button>
+              <button className="menu-dropdown-item" onClick={() => {
+                setMenuOpen(false);
+                localStorage.removeItem('currentGameId');
+                navigate('/');
+              }}>Main</button>
+              <button className="menu-dropdown-item" onClick={() => {
+                setMenuOpen(false);
+                localStorage.removeItem('currentGameId');
+                onLogout();
+              }}>Logout</button>
             </div>
           )}
         </div>
