@@ -54,6 +54,17 @@ class TokenizedHistoryDTO(BaseModel):
     class Config:
         from_attributes = True
 
+class DeepMemoryDTO(BaseModel):
+    id: int
+    saved_game_id: int
+    summary: str
+    token_count: Optional[int] = None
+    chunks_merged: Optional[int] = None
+    last_merged_end_index: Optional[int] = None
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+        
 class SavedGameDTO(BaseModel):
     id: int
     user_id: int
@@ -74,6 +85,6 @@ class SavedGameDTO(BaseModel):
     tokenized_history_block_size: int = 200
     created_at: datetime
     updated_at: datetime
-    deep_memory: Optional[dict] = None
+    deep_history: Optional[List[DeepMemoryDTO]] = None
     class Config:
         from_attributes = True

@@ -1,4 +1,4 @@
-from dtos import UserDTO, WorldDTO, GameRatingDTO, HistoryDTO, TokenizedHistoryDTO, SavedGameDTO
+from dtos import UserDTO, WorldDTO, GameRatingDTO, HistoryDTO, TokenizedHistoryDTO, SavedGameDTO, DeepMemoryDTO
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -302,16 +302,21 @@ def get_saved_game(
     if game.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden: not your saved game")
     
-    # Fetch related history and tokenized history
+    # Fetch related history, tokenized history, and deep history
     history = db.query(StoryHistory).filter(StoryHistory.saved_game_id == game_id).all()
     tokenized_history = db.query(TokenizedHistory).filter(TokenizedHistory.saved_game_id == game_id).all()
-    
+    deep_history = db.query(DeepMemory).filter(DeepMemory.saved_game_id == game_id).all()
+
     # Convert to DTOs
     history_dtos = [HistoryDTO.model_validate(h) for h in history]
     tokenized_history_dtos = [TokenizedHistoryDTO.model_validate(th) for th in tokenized_history]
-    
-    # Build and return the DTO
-    return saved_game_to_dto(game, history, tokenized_history, db)
+    from dtos import DeepMemoryDTO
+    deep_history_dtos = [DeepMemoryDTO.model_validate(d) for d in deep_history]
+
+    # Build and return the DTO, now including deep_history
+    dto = saved_game_to_dto(game, history, tokenized_history, db)
+    dto.deep_history = deep_history_dtos
+    return dto
 
 @app.get("/users/{user_id}/saved_games/", response_model=List[SavedGameDTO])
 def list_user_saved_games(

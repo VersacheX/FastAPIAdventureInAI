@@ -19,9 +19,12 @@ function Game({ game, token, onExit, onLogout }) {
   const [userInput, setUserInput] = useState('');
   const [localHistory, setLocalHistory] = useState(game.history || []);
   const [localTokenized, setLocalTokenized] = useState(game.tokenized_history || []);
-  const [deepMemory, setDeepMemory] = useState(null);
+  // Deep memory is now a list of DeepMemoryDTOs from game.deep_history
+  const [localDeepHistory, setLocalDeepHistory] = useState(game.deep_history || []);
+  // For editing, track which deep memory block is being edited
+  const [editingDeepMemoryIndex, setEditingDeepMemoryIndex] = useState(null);
+  const [editedDeepMemory, setEditedDeepMemory] = useState('');
   const [tokenizedHistory, setTokenizedHistory] = useState([]);
-  const [deepMemoryData, setDeepMemoryData] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -29,8 +32,7 @@ function Game({ game, token, onExit, onLogout }) {
   const [editedText, setEditedText] = useState('');
   const [editingTokenizedId, setEditingTokenizedId] = useState(null);
   const [editedTokenizedSummary, setEditedTokenizedSummary] = useState('');
-  const [editingDeepMemory, setEditingDeepMemory] = useState(false);
-  const [editedDeepMemory, setEditedDeepMemory] = useState('');
+  // (Removed: now handled by editingDeepMemoryIndex and editedDeepMemory)
   const [actionMode, setActionMode] = useState('ACTION');
   const [placeholderText, setPlaceholderText] = useState('Enter your action...');
   const [failedMessage, setFailedMessage] = useState(null);
@@ -47,16 +49,14 @@ function Game({ game, token, onExit, onLogout }) {
   const calculateTokenStats = () => {
     const maxHistoryTokens = game.tokenize_threshold || 850;
     const maxTokenizedChunks = game.max_tokenized_history_block || 6;
-    
+
     // Calculate active tokenized tokens (most recent chunks)
     const recentTokenized = localTokenized.slice(-maxTokenizedChunks);
     const activeTokenizedTokens = recentTokenized.reduce((sum, chunk) => sum + (chunk.token_count || 0), 0);
-    
+
     // Calculate active history tokens (most recent entries up to threshold)
-    // localHistory contains only untokenized entries
     let activeHistoryTokens = 0;
     let activeHistoryCount = 0;
-    
     for (let i = localHistory.length - 1; i >= 0; i--) {
       const entryTokens = localHistory[i].token_count || 0;
       if (activeHistoryTokens + entryTokens <= maxHistoryTokens) {
@@ -66,25 +66,31 @@ function Game({ game, token, onExit, onLogout }) {
         break;
       }
     }
-    
+
+    // Calculate deep history tokens
+    const deepHistoryTokens = localDeepHistory.reduce((sum, h) => sum + (h.token_count || 0), 0);
+    const deepHistoryEntries = localDeepHistory.length;
+
     // Calculate totals
-    const activeTokens = activeTokenizedTokens + activeHistoryTokens;
-    const totalTokens = localHistory.reduce((sum, h) => sum + (h.token_count || 0), 0);
-    
+    const activeTokens = activeTokenizedTokens + activeHistoryTokens + deepHistoryTokens;
+    const totalTokens = localHistory.reduce((sum, h) => sum + (h.token_count || 0), 0) + deepHistoryTokens;
+
     return {
       active_tokens: activeTokens,
       total_tokens: totalTokens,
       active_tokenized_chunks: recentTokenized.length,
       active_history_entries: activeHistoryCount,
-      total_history_entries: localHistory.length
+      total_history_entries: localHistory.length,
+      deep_history_tokens: deepHistoryTokens,
+      deep_history_entries: deepHistoryEntries
     };
   };
 
-  // Update token stats whenever history or tokenized history changes
+  // Update token stats whenever history, tokenized history, or deep history changes
   useEffect(() => {
     const stats = calculateTokenStats();
     setTokenStats(stats);
-  }, [localHistory, localTokenized]);
+  }, [localHistory, localTokenized, localDeepHistory, game]);
 
   // Scroll to bottom whenever history changes
   useEffect(() => {
@@ -111,36 +117,10 @@ function Game({ game, token, onExit, onLogout }) {
     }
   };
 
-  // Fetch deep memory
-  const fetchDeepMemory = async () => {
-    try {
-      const response = await axios.get(
-        `${API_URL}/saved_games/${game.id}/deep_memory/`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }
-      );
-      setDeepMemory(response.data?.summary || null);
-      setDeepMemoryData(response.data);
-      console.log(`Deep Memory loaded: ${response.data?.chunks_merged || 0} chunks merged, ${response.data?.token_count || 0} tokens`);
-    } catch (err) {
-      // Deep memory doesn't exist yet - this is normal for new/short games
-      if (err.response?.status === 404) {
-        console.log('No deep memory yet (game history not long enough)');
-        setDeepMemory(null);
-        setDeepMemoryData(null);
-      } else {
-        console.error('Failed to fetch deep memory:', err);
-      }
-    }
-  };
-
-  // Initial fetch
+  // When game.deep_history changes, update localDeepHistory
   useEffect(() => {
-    fetchDeepMemory();
-  }, []);
+    setLocalDeepHistory(game.deep_history || []);
+  }, [game.deep_history]);
 
   const handleUndo = async () => {
     if (localHistory.length === 0 || submitting || generating) return;
@@ -251,64 +231,24 @@ function Game({ game, token, onExit, onLogout }) {
     setEditedTokenizedSummary('');
   };
 
-  const handleEditDeepMemory = async () => {
-    // If no deepMemoryData, create a new deep memory entry
-    if (!deepMemoryData) {
-      try {
-        const response = await axios.post(`${API_URL}/deep_memory/`, {
-          saved_game_id: game.id,
-          summary: ''
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setDeepMemoryData(response.data);
-        setDeepMemory('');
-      } catch (err) {
-        setErrorMessage('Failed to create deep memory.');
-        setTimeout(() => setErrorMessage(''), 5000);
-        return;
-      }
-    }
-    setEditingDeepMemory(true);
-    setEditedDeepMemory(deepMemory || '');
+  // Edit deep memory block by index
+  const handleEditDeepMemory = (idx) => {
+    setEditingDeepMemoryIndex(idx);
+    setEditedDeepMemory(localDeepHistory[idx]?.summary || '');
   };
 
-  const handleSaveDeepMemoryEdit = async () => {
-    try {
-      let response;
-      if (!deepMemoryData || !deepMemoryData.id) {
-        // Create new deep memory if it doesn't exist or id is missing
-        response = await axios.post(`${API_URL}/deep_memory/`, {
-          saved_game_id: game.id,
-          summary: editedDeepMemory
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-      } else {
-        // Update existing deep memory
-        response = await axios.put(
-          `${API_URL}/deep_memory/${deepMemoryData.id}`,
-          { summary: editedDeepMemory },
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          }
-        );
-      }
-      setDeepMemory(response.data.summary);
-      setDeepMemoryData(response.data);
-      setEditingDeepMemory(false);
-      setEditedDeepMemory('');
-    } catch (err) {
-      console.error('Failed to save deep memory edit:', err);
-      setErrorMessage('Failed to save deep memory changes.');
-      setTimeout(() => setErrorMessage(''), 5000);
-    }
+  // Save deep memory edit (local only, no API call)
+  const handleSaveDeepMemoryEdit = () => {
+    if (editingDeepMemoryIndex === null) return;
+    setLocalDeepHistory(prev => prev.map((block, idx) =>
+      idx === editingDeepMemoryIndex ? { ...block, summary: editedDeepMemory } : block
+    ));
+    setEditingDeepMemoryIndex(null);
+    setEditedDeepMemory('');
   };
 
   const handleCancelDeepMemoryEdit = () => {
-    setEditingDeepMemory(false);
+    setEditingDeepMemoryIndex(null);
     setEditedDeepMemory('');
   };
 
@@ -403,7 +343,7 @@ function Game({ game, token, onExit, onLogout }) {
           summary: t.summary,
           token_count: t.token_count
         })),
-        deep_memory: deepMemory,
+        deep_memory: localDeepHistory.map(block => block.summary).join('\n\n'),
         user_input: currentInput,
         action_mode: 'ACTION', // Always use ACTION mode for retry
         include_initial: false
@@ -444,7 +384,7 @@ function Game({ game, token, onExit, onLogout }) {
       
       // Refresh tokenized history and deep memory in case new chunks were created/compressed
       await fetchTokenizedHistory();
-      await fetchDeepMemory();
+      // Deep memory now comes from game DTO, so reload game if needed
       
     } catch (error) {
       console.error('Error during action submission:', error);
@@ -475,7 +415,7 @@ function Game({ game, token, onExit, onLogout }) {
 
   // Calculate stats
   const totalTokenizedChunks = tokenizedHistory.length;
-  const committedToDeepMemory = deepMemory?.chunks_merged || 0;
+  const committedToDeepMemory = localDeepHistory.reduce((sum, block) => sum + (block.chunks_merged || 0), 0);
 
   return (
     <div className="game-screen">
@@ -596,34 +536,38 @@ function Game({ game, token, onExit, onLogout }) {
             </button>
             {deepMemoryOpen && (
               <div className="collapsible-content">
-                {deepMemoryData ? (
-                  <div className="deep-memory-container">
-                    {editingDeepMemory ? (
-                      <div className="tokenized-edit-mode">
-                        <textarea
-                          className="tokenized-edit-textarea"
-                          value={editedDeepMemory}
-                          onChange={(e) => setEditedDeepMemory(e.target.value)}
-                          rows={6}
-                          autoFocus
-                        />
-                        <div className="tokenized-edit-actions">
-                          <button className="tokenized-edit-save" onClick={handleSaveDeepMemoryEdit}>✓ Save</button>
-                          <button className="tokenized-edit-cancel" onClick={handleCancelDeepMemoryEdit}>✕ Cancel</button>
-                        </div>
+                {localDeepHistory && localDeepHistory.length > 0 ? (
+                  <div className="deep-memory-list">
+                    {localDeepHistory.map((block, idx) => (
+                      <div key={block.id || idx} className="deep-memory-block">
+                        {editingDeepMemoryIndex === idx ? (
+                          <div className="tokenized-edit-mode">
+                            <textarea
+                              className="tokenized-edit-textarea"
+                              value={editedDeepMemory}
+                              onChange={(e) => setEditedDeepMemory(e.target.value)}
+                              rows={6}
+                              autoFocus
+                            />
+                            <div className="tokenized-edit-actions">
+                              <button className="tokenized-edit-save" onClick={handleSaveDeepMemoryEdit}>✓ Save</button>
+                              <button className="tokenized-edit-cancel" onClick={handleCancelDeepMemoryEdit}>✕ Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div 
+                            className="tokenized-content-clickable"
+                            onClick={() => handleEditDeepMemory(idx)}
+                            title="Click to edit"
+                          >
+                            <div className="tokenized-token-count">
+                              {block.token_count || 0} tokens | {block.chunks_merged || 0} chunks merged
+                            </div>
+                            <p className="tokenized-summary">{block.summary}</p>
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div 
-                        className="tokenized-content-clickable"
-                        onClick={handleEditDeepMemory}
-                        title="Click to edit"
-                      >
-                        <div className="tokenized-token-count">
-                          {deepMemoryData.token_count || 0} tokens | {deepMemoryData.chunks_merged || 0} chunks merged
-                        </div>
-                        <p className="tokenized-summary">{deepMemory}</p>
-                      </div>
-                    )}
+                    ))}
                   </div>
                 ) : (
                   <p>No deep memory yet. Ancient events will appear here once your story is long enough.</p>
@@ -823,34 +767,38 @@ function Game({ game, token, onExit, onLogout }) {
             <button className="mobile-panel-close" onClick={() => setMobileDeepMemoryOpen(false)}>✕</button>
           </div>
           <div className="mobile-panel-content">
-            {deepMemoryData ? (
-              <div className="deep-memory-container">
-                {editingDeepMemory ? (
-                  <div className="tokenized-edit-mode">
-                    <textarea
-                      className="tokenized-edit-textarea"
-                      value={editedDeepMemory}
-                      onChange={(e) => setEditedDeepMemory(e.target.value)}
-                      rows={6}
-                      autoFocus
-                    />
-                    <div className="tokenized-edit-actions">
-                      <button className="tokenized-edit-save" onClick={handleSaveDeepMemoryEdit}>✓ Save</button>
-                      <button className="tokenized-edit-cancel" onClick={handleCancelDeepMemoryEdit}>✕ Cancel</button>
-                    </div>
+            {localDeepHistory && localDeepHistory.length > 0 ? (
+              <div className="deep-memory-list">
+                {localDeepHistory.map((block, idx) => (
+                  <div key={block.id || idx} className="deep-memory-block">
+                    {editingDeepMemoryIndex === idx ? (
+                      <div className="tokenized-edit-mode">
+                        <textarea
+                          className="tokenized-edit-textarea"
+                          value={editedDeepMemory}
+                          onChange={(e) => setEditedDeepMemory(e.target.value)}
+                          rows={6}
+                          autoFocus
+                        />
+                        <div className="tokenized-edit-actions">
+                          <button className="tokenized-edit-save" onClick={handleSaveDeepMemoryEdit}>✓ Save</button>
+                          <button className="tokenized-edit-cancel" onClick={handleCancelDeepMemoryEdit}>✕ Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div 
+                        className="tokenized-content-clickable"
+                        onClick={() => handleEditDeepMemory(idx)}
+                        title="Click to edit"
+                      >
+                        <div className="tokenized-token-count">
+                          {block.token_count || 0} tokens | {block.chunks_merged || 0} chunks merged
+                        </div>
+                        <p className="tokenized-summary">{block.summary}</p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div 
-                    className="tokenized-content-clickable"
-                    onClick={handleEditDeepMemory}
-                    title="Click to edit"
-                  >
-                    <div className="tokenized-token-count">
-                      {deepMemoryData.token_count || 0} tokens | {deepMemoryData.chunks_merged || 0} chunks merged
-                    </div>
-                    <p className="tokenized-summary">{deepMemory}</p>
-                  </div>
-                )}
+                ))}
               </div>
             ) : (
               <p>No deep memory yet. Ancient events will appear here once your story is long enough.</p>
