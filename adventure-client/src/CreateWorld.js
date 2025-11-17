@@ -33,6 +33,7 @@ function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null }) {
     // Debounce: wait 500ms after user stops typing before counting tokens
     const timeoutId = setTimeout(async () => {
       try {
+        // eslint-disable-next-line
         console.log('Sending text to token counter:', combinedText.length, 'characters');
         const response = await axios.post(
           `${AI_URL}/count_tokens/`,
@@ -43,6 +44,7 @@ function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null }) {
             }
           }
         );
+        // eslint-disable-next-line
         console.log('Token count response:', response.data);
         setTokenCount(response.data.token_count || 0);
       } catch (err) {

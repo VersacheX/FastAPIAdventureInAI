@@ -40,17 +40,17 @@ def load_game(token, user):
         print("No saved games found for this user.")
         return None
     print("\nSaved Games:")
-    for idx, game in enumerate(games, 1):
-        # Use history_count to get chapter, section, subsection
-        chapter, section, subsection = get_current_chapter_section(
-            [None] * game.history_count,  # simulate history list of correct length
-            [None] * (game.history_count // TOKENIZE_HISTORY_CHUNK_SIZE)   # simulate tokenized history list
-        )
-        print(
-            f"{idx}. {game.player_name} ({game.created_at}) - "
-            f"{game.world_name} | {game.rating_name} | "
-            f"Ch {chapter}.{section}.{subsection}"
-        )
+    # for idx, game in enumerate(games, 1):
+    #     # Use history_count to get chapter, section, subsection
+    #     # chapter, section, subsection = get_current_chapter_section(
+    #     #     [None] * game.history_count,  # simulate history list of correct length
+    #     #     [None] * (game.history_count // TOKENIZE_HISTORY_CHUNK_SIZE)   # simulate tokenized history list
+    #     # )
+    #     # print(
+    #     #     f"{idx}. {game.player_name} ({game.created_at}) - "
+    #     #     f"{game.world_name} | {game.rating_name} | "
+    #     #     f"Ch {chapter}.{section}.{subsection}"
+    #     # )
     while True:
         choice = input(f"Select a game to load (1-{len(games)}), or 0 to cancel: ").strip()
         if choice == "0":

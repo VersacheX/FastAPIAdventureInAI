@@ -23,6 +23,7 @@ function Game({ game, token, onExit, onLogout }) {
   const [editingDeepMemory, setEditingDeepMemory] = useState(false);
   const [editedDeepMemory, setEditedDeepMemory] = useState('');
   const [actionMode, setActionMode] = useState('ACTION');
+  const [placeholderText, setPlaceholderText] = useState('Enter your action...');
   const [failedMessage, setFailedMessage] = useState(null);
   const [tokenStats, setTokenStats] = useState(null);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
@@ -74,7 +75,7 @@ function Game({ game, token, onExit, onLogout }) {
   useEffect(() => {
     const stats = calculateTokenStats();
     setTokenStats(stats);
-  }, [localHistory, localTokenized]);
+  }, [localHistory, localTokenized, calculateTokenStats, setTokenStats ]);
 
   // Scroll to bottom whenever history changes
   useEffect(() => {
@@ -452,13 +453,16 @@ function Game({ game, token, onExit, onLogout }) {
     }
   };
 
-  // Determine placeholder text based on playerAction
-  let placeholderText = 'Enter your action...';
-  if (playerAction === 'say') {
-    placeholderText = 'Enter what you say...';
-  } else if (playerAction === 'story') {
-    placeholderText = 'Add to the story...';
-  }
+  // Update placeholder text whenever actionMode changes
+  useEffect(() => {
+    if (actionMode === 'SPEECH') {
+      setPlaceholderText('Enter what you say...');
+    } else if (actionMode === 'NARRATE') {
+      setPlaceholderText('Add to the story...');
+    } else {
+      setPlaceholderText('Enter your action...');
+    }
+  }, [actionMode]);
 
   // Calculate stats
   const totalTokenizedChunks = tokenizedHistory.length;
@@ -688,6 +692,14 @@ function Game({ game, token, onExit, onLogout }) {
                   const currentIndex = modes.indexOf(actionMode);
                   const nextMode = modes[(currentIndex + 1) % modes.length];
                   setActionMode(nextMode);
+                  // Update placeholder text immediately
+                  if (nextMode === 'SPEECH') {
+                    setPlaceholderText('Enter what you say...');
+                  } else if (nextMode === 'NARRATE') {
+                    setPlaceholderText('Add to the story...');
+                  } else {
+                    setPlaceholderText('Enter your action...');
+                  }
                 }}
                 title="Click to cycle between modes"
               >

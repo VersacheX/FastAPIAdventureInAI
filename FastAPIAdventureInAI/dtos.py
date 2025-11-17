@@ -74,5 +74,6 @@ class SavedGameDTO(BaseModel):
     tokenized_history_block_size: int = 200
     created_at: datetime
     updated_at: datetime
+    deep_memory: Optional[dict] = None
     class Config:
         from_attributes = True
