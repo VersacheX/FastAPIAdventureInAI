@@ -383,8 +383,8 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
         "  - Repeated information\n"
         "  - Narrative or analytical commentary\n"
         "Be extremely concise. Use simple, direct language.\n"
-        "Only state facts. Do NOT review, interpret, or introduce the segment.\n"
-        "Do NOT use phrases like 'This story segment...', 'In this scene...', or any narrative/analysis.\n"
+        #"Only state facts. Do NOT review, interpret, or introduce the segment.\n"
+        #"Do NOT use phrases like 'This story segment...', 'In this scene...', or any narrative/analysis.\n"
         "Write in bullet points or a single direct sentence. No narrative, review, or analysis.\n"
         "Do not use any symbols or formatting—just plain text.\n"
     ]
