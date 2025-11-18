@@ -14,6 +14,11 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+
+class HistoryEntryIn(BaseModel):
+    """Single-history-entry payload used by the client when posting one entry."""
+    entry: str
+
 class HistoryIn(BaseModel):
     game_id: str
     history: List[str]

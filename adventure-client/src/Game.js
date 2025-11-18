@@ -19,9 +19,7 @@ function Game({ game, token, onExit, onLogout }) {
   const [userInput, setUserInput] = useState('');
   const [localHistory, setLocalHistory] = useState(game.history || []);
   const [localTokenized, setLocalTokenized] = useState(game.tokenized_history || []);
-  // Deep memory is now a list of DeepMemoryDTOs from game.deep_history
   const [localDeepHistory, setLocalDeepHistory] = useState(game.deep_history || []);
-  // For editing, track which deep memory block is being edited
   const [editingDeepMemoryIndex, setEditingDeepMemoryIndex] = useState(null);
   const [editedDeepMemory, setEditedDeepMemory] = useState('');
   const [tokenizedHistory, setTokenizedHistory] = useState([]);
@@ -32,7 +30,6 @@ function Game({ game, token, onExit, onLogout }) {
   const [editedText, setEditedText] = useState('');
   const [editingTokenizedId, setEditingTokenizedId] = useState(null);
   const [editedTokenizedSummary, setEditedTokenizedSummary] = useState('');
-  // (Removed: now handled by editingDeepMemoryIndex and editedDeepMemory)
   const [actionMode, setActionMode] = useState('ACTION');
   const [placeholderText, setPlaceholderText] = useState('Enter your action...');
   const [failedMessage, setFailedMessage] = useState(null);
@@ -41,7 +38,6 @@ function Game({ game, token, onExit, onLogout }) {
   const [mobileTokenizedOpen, setMobileTokenizedOpen] = useState(false);
   const [mobileDeepMemoryOpen, setMobileDeepMemoryOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [playerAction, setPlayerAction] = useState('action'); // Example: 'action', 'say', 'story'
   const navigate = useNavigate();
   const scrollAreaRef = useRef(null);
 
@@ -99,6 +95,11 @@ function Game({ game, token, onExit, onLogout }) {
     }
   }, [localHistory]);
 
+  // When game.deep_history changes, update localDeepHistory
+  useEffect(() => {
+    setLocalDeepHistory(game.deep_history || []);
+  }, [game.deep_history]);
+
   // Fetch tokenized history
   const fetchTokenizedHistory = async () => {
     try {
@@ -116,11 +117,6 @@ function Game({ game, token, onExit, onLogout }) {
       console.error('Failed to fetch tokenized history:', err);
     }
   };
-
-  // When game.deep_history changes, update localDeepHistory
-  useEffect(() => {
-    setLocalDeepHistory(game.deep_history || []);
-  }, [game.deep_history]);
 
   const handleUndo = async () => {
     if (localHistory.length === 0 || submitting || generating) return;
@@ -237,14 +233,37 @@ function Game({ game, token, onExit, onLogout }) {
     setEditedDeepMemory(localDeepHistory[idx]?.summary || '');
   };
 
-  // Save deep memory edit (local only, no API call)
-  const handleSaveDeepMemoryEdit = () => {
+  // Save deep memory edit with API persistence
+  const handleSaveDeepMemoryEdit = async () => {
     if (editingDeepMemoryIndex === null) return;
-    setLocalDeepHistory(prev => prev.map((block, idx) =>
-      idx === editingDeepMemoryIndex ? { ...block, summary: editedDeepMemory } : block
-    ));
-    setEditingDeepMemoryIndex(null);
-    setEditedDeepMemory('');
+    
+    const block = localDeepHistory[editingDeepMemoryIndex];
+    
+    try {
+      const response = await axios.put(
+        `${API_URL}/deep_memory/${block.id}`,
+        { summary: editedDeepMemory },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }
+      );
+      
+      // Update local state with the response data including recalculated token_count
+      setLocalDeepHistory(prev => prev.map((b, idx) => 
+        idx === editingDeepMemoryIndex ? response.data : b
+      ));
+      
+      setEditingDeepMemoryIndex(null);
+      setEditedDeepMemory('');
+      
+      // Token stats will auto-update via useEffect watching localDeepHistory
+    } catch (err) {
+      console.error('Failed to save deep memory edit:', err);
+      setErrorMessage('Failed to save deep memory changes.');
+      setTimeout(() => setErrorMessage(''), 5000);
+    }
   };
 
   const handleCancelDeepMemoryEdit = () => {

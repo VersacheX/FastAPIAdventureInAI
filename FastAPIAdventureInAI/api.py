@@ -1,6 +1,6 @@
 import uuid
 from argon2 import PasswordHasher, exceptions
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -70,7 +70,7 @@ def get_password_hash(password):
 
 def create_access_token(data: dict, expires_delta=None):
     to_encode = data.copy()
-    expire = datetime.now(datetime.timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -539,7 +539,7 @@ async def update_saved_game(
     game.rating_id = game_data.rating_id
     game.player_name = game_data.player_name
     game.player_gender = game_data.player_gender
-    game.updated_at = datetime.utcnow()
+    game.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(game)
 
@@ -559,8 +559,8 @@ async def create_saved_game(
         rating_id=game_data.rating_id,
         player_name=game_data.player_name,
         player_gender=game_data.player_gender,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc)
     )
     db.add(new_game)
     db.commit()
@@ -573,7 +573,7 @@ async def create_saved_game(
                 saved_game_id=new_game.id,
                 entry_index=idx,
                 text=entry.entry,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
             db.add(new_history)
 
@@ -585,7 +585,7 @@ async def create_saved_game(
                 start_index=th.start_index,
                 end_index=th.end_index,
                 summary=th.summary,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
             db.add(new_th)
 
@@ -625,7 +625,7 @@ async def get_history_for_saved_game(
 
 @app.post("/history/", response_model=HistoryDTO, status_code=201)
 async def create_history_entry(
-    history_data: HistoryIn,
+    history_data: HistoryEntryIn,
     saved_game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -639,14 +639,14 @@ async def create_history_entry(
         saved_game_id=saved_game_id,
         entry_index=next_entry_index,
         text=history_data.entry,  # <-- CORRECT
-        created_at=datetime.now(datetime.timezone.utc)
+        created_at=datetime.now(timezone.utc)
     )
     db.add(new_history)
     db.commit()
     db.refresh(new_history)
     
     # Update game timestamp
-    game.updated_at = datetime.utcnow()
+    game.updated_at = datetime.now(timezone.utc)
     db.commit()
     
     # TODO: Check if tokenization is needed and queue background task
@@ -756,7 +756,7 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
                 summary=summary,
                 token_count=summary_token_count,
                 history_references=history_references,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
             db.add(new_tokenized)
             print(f"Created new tokenized chunk with {len(chunk_entries)} entries ({summary_token_count} tokens)")
@@ -844,7 +844,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         deep_memory.token_count = deep_token_count
         deep_memory.chunks_merged += len(old_chunks)
         deep_memory.last_merged_end_index = old_chunks[-1].end_index
-        deep_memory.updated_at = datetime.utcnow()
+        deep_memory.updated_at = datetime.now(timezone.utc)
         print(f"Updated deep memory: {deep_memory.chunks_merged} total chunks compressed")
     else:
         # Create new deep memory
@@ -854,7 +854,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
             token_count=deep_token_count,
             chunks_merged=len(old_chunks),
             last_merged_end_index=old_chunks[-1].end_index,
-            created_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc)
         )
         db.add(deep_memory)
         print(f"Created deep memory: {len(old_chunks)} chunks compressed")
@@ -956,7 +956,7 @@ async def create_tokenized_history_entry(
         start_index=th_data.start_index,
         end_index=th_data.end_index,
         summary=th_data.summary,
-        created_at=datetime.now(datetime.timezone.utc)
+        created_at=datetime.now(timezone.utc)
     )
     db.add(new_th)
     db.commit()

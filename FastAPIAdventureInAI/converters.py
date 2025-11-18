@@ -138,7 +138,7 @@ def convert_tokenized_history(saved_game_id, th_list):
             start_index=th.start_index,
             end_index=th.end_index,
             summary=th.summary,
-            created_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc)
         )
         for th in th_list or []
     ]
