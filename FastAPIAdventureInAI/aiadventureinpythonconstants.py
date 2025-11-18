@@ -1,13 +1,13 @@
 ﻿# Game mode data
 GAME_RATINGS = (
-    # 'Limit to rated G content',
-    # 'Limit to rated PG-13 content',
-    # 'Limit to rated R content'
+    'Family Friendly',
+    'Mature',
+    'Unrestricted'
 )
 GAME_RATING_PROMPTS = (
-    # "the light hearted recent story",
-    # "the recent story",
-    # "the recent story in cinemeatic detail"
+    "the light-hearted recent story, suitable for all ages",
+    "the recent story with mature themes",
+    "the recent story in cinematic detail with unrestricted content"
 )
 
 # Story setups

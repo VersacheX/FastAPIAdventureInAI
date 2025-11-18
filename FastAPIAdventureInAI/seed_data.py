@@ -25,38 +25,48 @@ from business.models import GameRating, World, AIDirectiveSettings, AccountLevel
 
 ########################## METHODS  IN THIS HAVE BEEN COMMENTED OUT TO PREVENT DATA OVERWRITES, BUT LEFT FOR SEEDING PURPOSES ##########################
 
-# def seed_game_ratings():
-#     db: Session = SessionLocal()
-#     for idx, (name, ai_prompt) in enumerate(zip(GAME_RATINGS, GAME_RATING_PROMPTS)):
-#         existing = db.query(GameRating).filter_by(name=name).first()
-#         if existing:
-#             existing.ai_prompt = ai_prompt
-#             existing.id = idx + 1
-#         else:
-#             db.add(GameRating(id=idx+1, name=name, ai_prompt=ai_prompt))
-#     db.commit()
-#     db.close()
+def seed_game_ratings():
+    """Seed default game ratings (content filters)."""
+    from aiadventureinpythonconstants import GAME_RATING_PROMPTS
+    db: Session = SessionLocal()
+    if db.query(GameRating).count() > 0:
+        print("GameRatings already exist. Skipping game ratings seeding.")
+        db.close()
+        return
+    for idx, (name, ai_prompt) in enumerate(zip(GAME_RATINGS, GAME_RATING_PROMPTS)):
+        db.add(GameRating(id=idx+1, name=name, ai_prompt=ai_prompt))
+        print(f"Created GameRating: {name}")
+    db.commit()
+    db.close()
 
 def seed_worlds():
     db: Session = SessionLocal()
+    # Check if any worlds exist
+    if db.query(World).count() > 0:
+        print("Worlds already exist. Skipping world seeding.")
+        db.close()
+        return
+    # Find admin user
+    admin = db.query(User).filter_by(username="admin").first()
+    admin_id = admin.id if admin else None
+    from aiadventureinpythonconstants import STORY_SETUPS
     for name, setup in STORY_SETUPS.items():
-        existing = db.query(World).filter_by(name=name).first()
-        if existing:
-            # Update existing world
-            existing.preface = setup["preface"]
-            existing.world_tokens = setup["world_tokens"]
-        else:
-            # Add new world, let DB assign id
-            db.add(World(
-                name=name,
-                preface=setup["preface"],
-                world_tokens=setup["world_tokens"]
-            ))
+        db.add(World(
+            user_id=admin_id,
+            name=name,
+            preface=setup["preface"],
+            world_tokens=setup["world_tokens"]
+        ))
+        print(f"Created world: {name} (user_id={admin_id})")
     db.commit()
     db.close()
 
 def seed_ai_directive_settings():
     db: Session = SessionLocal()
+    if db.query(AIDirectiveSettings).count() > 0:
+        print("AI Directive Settings already exist. Skipping directive settings seeding.")
+        db.close()
+        return
     
     # Basic settings (ID=1) - more restrictive
     basic = db.query(AIDirectiveSettings).filter_by(id=1).first()
@@ -157,6 +167,10 @@ def seed_ai_directive_settings():
 
 def seed_account_levels():
     db: Session = SessionLocal()
+    if db.query(AccountLevel).count() > 0:
+        print("Account levels already exist. Skipping account levels seeding.")
+        db.close()
+        return
     
     # Basic account level
     basic_level = db.query(AccountLevel).filter_by(name="Basic").first()
@@ -191,9 +205,44 @@ def seed_account_levels():
     
     db.close()
 
+def seed_admin_user():
+    """Create default admin user if it doesn't exist."""
+    from services.auth_service import get_password_hash
+    db: Session = SessionLocal()
+    if db.query(User).filter_by(username="admin").count() > 0:
+        print("Admin user already exists. Skipping admin seeding.")
+        db.close()
+        return
+    # Create admin user with default password 'admin123'
+    admin = User(
+        username="admin",
+        hashed_password=get_password_hash("admin123"),
+        email="admin@localhost",
+        account_level_id=2  # Elite level
+    )
+    db.add(admin)
+    db.commit()
+    print("Created admin user (username: admin, password: admin123)")
+    print("IMPORTANT: Change the admin password after first login!")
+    db.close()
+
 if __name__ == "__main__":
-    #seed_game_ratings()
+    print("=" * 60)
+    print("Starting database seeding...")
+    print("=" * 60)
+    
+    seed_game_ratings()
     seed_worlds()
     seed_ai_directive_settings()
     seed_account_levels()
-    print("Seeded Worlds, AI Directive Settings, and Account Levels.")
+    seed_admin_user()
+    
+    print("=" * 60)
+    print("Database seeding complete!")
+    print("=" * 60)
+    print("\nNext steps:")
+    print("1. Start AI server: python ai_server.py")
+    print("2. Start API server: python main.py")
+    print("3. Login with username: admin, password: admin123")
+    print("4. CHANGE THE ADMIN PASSWORD!")
+    print("=" * 60)
