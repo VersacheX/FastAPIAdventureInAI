@@ -1,4 +1,4 @@
-from ai_client_requests import ai_summarize_chunk, ai_prime_narrator, ai_generate_story
+from ai.ai_client_requests import ai_summarize_chunk, ai_prime_narrator, ai_generate_story
 
 def get_recent_memories(memory_log, limit=None):
     """
@@ -16,7 +16,7 @@ def build_structured_json(context, user_input, settings=None):
     """
     if settings is None:
         # Fallback to loading from ai_settings if not provided
-        from ai_settings import get_ai_settings
+        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
     
     if not user_input.strip() == '':
@@ -61,7 +61,7 @@ def generate_story(context, user_input=None, include_initial=False, settings=Non
     Settings dict should contain AI configuration.
     """
     if settings is None:
-        from ai_settings import get_ai_settings
+        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
         
     if include_initial:
@@ -86,7 +86,7 @@ def tokenize_history(context, settings=None):
                                   TOKENIZE_HISTORY_CHUNK_SIZE, TOKENIZED_HISTORY_BLOCK_SIZE
     """
     if settings is None:
-        from ai_settings import get_ai_settings
+        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
     
     history = context["history"]
@@ -127,7 +127,7 @@ def summarize_chunk(chunk, max_tokens=None):
     max_tokens should be passed from loaded settings.
     """
     if max_tokens is None:
-        from ai_settings import get_ai_settings
+        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
         max_tokens = settings.get('TOKENIZED_HISTORY_BLOCK_SIZE')
     

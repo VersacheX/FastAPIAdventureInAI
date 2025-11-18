@@ -16,12 +16,12 @@ from gptqmodel.models import GPTQModel
 from transformers import AutoTokenizer, set_seed
 
 # Load AI settings from database
-from ai_settings import get_ai_settings
+from ai.ai_settings import get_ai_settings
 
 # Import configuration from environment
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
-from schemas_ai_server import *
+from ai.schemas_ai_server import *
 
 # Load settings once at startup
 _AI_SETTINGS = get_ai_settings()
@@ -99,12 +99,13 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 @app.post("/prime_narrator/")
 async def prime_narrator(username: str = Depends(verify_token)):
-    inputs = await run_in_threadpool(STORY_TOKENIZER("Prime the narrator.", return_tensors="pt").to("cuda"))
+    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER("Prime the narrator.", return_tensors="pt").to("cuda"))
     _ = await run_in_threadpool(
-        STORY_GENERATOR.generate,
+        lambda: STORY_GENERATOR.generate(
             **inputs,
             max_new_tokens=1,
             num_return_sequences=1
+        )
     )
     return {"status": "primed"}
 
@@ -173,13 +174,14 @@ async def generate_story(request: GenerateStoryRequest, username: str = Depends(
     # Build prompt (GAME_DIRECTIVE removed - redundant)
     prompt = flatten_json_prompt(context)
 
-    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
+    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
     prompt_token_count = inputs.input_ids.shape[-1]
 
     max_retries = 15
     text = ""
     for attempt in range(1, max_retries + 1):
-        output = await run_in_threadpool(STORY_GENERATOR.generate(
+        output = await run_in_threadpool(
+            lambda: STORY_GENERATOR.generate(
                 **inputs,
                 max_new_tokens=RESERVED_FOR_GENERATION,
                 num_return_sequences=1,
@@ -261,13 +263,14 @@ async def generate_from_game(request: GenerateFromGameRequest, username: str = D
     # print(prompt)
     # print("="*80 + "\n")
 
-    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
+    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
     prompt_token_count = inputs.input_ids.shape[-1]
     
     max_retries = 15
     text = ""
     for attempt in range(1, max_retries + 1):
-        output = await run_in_threadpool(STORY_GENERATOR.generate(
+        output = await run_in_threadpool(
+            lambda: STORY_GENERATOR.generate(
                 **inputs,
                 max_new_tokens=RESERVED_FOR_GENERATION,
                 num_return_sequences=1,
@@ -355,8 +358,9 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     print("="*80 + "\n")
     
     # Single attempt - accept whatever concise summary the AI produces
-    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
-    summary_output = await run_in_threadpool(STORY_GENERATOR.generate(
+    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
+    summary_output = await run_in_threadpool(
+        lambda: STORY_GENERATOR.generate(
             **inputs,
             max_new_tokens=max_tokens,
             num_return_sequences=1,

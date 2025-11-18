@@ -27,7 +27,7 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
     # Determine which settings to load
     if settings_id is None and user_id is not None:
         # Load user's account level settings
-        from models import User
+        from business.models import User
         need_close = False
         if db is None:
             db, need_close = _get_db_session()
@@ -51,7 +51,7 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
         return _settings_cache[cache_key]
     
     # Import here to avoid circular imports
-    from models import AIDirectiveSettings
+    from business.models import AIDirectiveSettings
     
     need_close = False
     if db is None:

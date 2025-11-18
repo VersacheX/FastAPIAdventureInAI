@@ -3,7 +3,7 @@ import jwt
 import os
 from config import SECRET_KEY, ALGORITHM, AI_SERVER_URL
 from aiadventureinpythonconstants import TOKENIZED_HISTORY_BLOCK_SIZE
-from converters import serialize_for_json
+from business.converters import serialize_for_json
 
 def _get_ai_auth_headers(username: str = None):
     """Generate auth headers for AI server requests"""

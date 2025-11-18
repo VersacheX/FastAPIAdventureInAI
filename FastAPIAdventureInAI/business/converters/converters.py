@@ -1,6 +1,6 @@
 from datetime import datetime
-from models import User, World, GameRating, SavedGame, StoryHistory, TokenizedHistory
-from dtos import UserDTO, WorldDTO, GameRatingDTO, SavedGameDTO, HistoryDTO, TokenizedHistoryDTO
+from business.models import User, World, GameRating, SavedGame, StoryHistory, TokenizedHistory
+from business.dtos import UserDTO, WorldDTO, GameRatingDTO, SavedGameDTO, HistoryDTO, TokenizedHistoryDTO
 
 def user_to_dto(user: User) -> UserDTO:
     return UserDTO.model_validate(user)

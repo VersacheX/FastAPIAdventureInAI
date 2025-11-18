@@ -2,10 +2,10 @@ import requests
 import os
 API_SERVER_URL = os.environ.get("API_SERVER_URL", "http://localhost:8000")
 from aiadventureinpythonconstants import TOKENIZE_HISTORY_CHUNK_SIZE
-from dtos import UserDTO, SavedGameDTO
+from business.dtos import UserDTO, SavedGameDTO
 import json
 # Removed unused import: get_current_chapter_section
-from converters import serialize_for_json
+from business.converters import serialize_for_json
 
 def login_user(username, password):
     url = f"{API_SERVER_URL}/token"

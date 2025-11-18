@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from models import GameRating, World, AIDirectiveSettings, AccountLevel, User
 from aiadventureinpythonconstants import (
     GAME_RATINGS,
     STORY_SETUPS,
@@ -20,7 +19,8 @@ from aiadventureinpythonconstants import (
     SAFE_PROMPT_LIMIT,
     MAX_WORLD_TOKENS
 )
-from api import SessionLocal
+from dependencies import SessionLocal
+from business.models import GameRating, World, AIDirectiveSettings, AccountLevel, User
 
 
 ########################## METHODS  IN THIS HAVE BEEN COMMENTED OUT TO PREVENT DATA OVERWRITES, BUT LEFT FOR SEEDING PURPOSES ##########################
