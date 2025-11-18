@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL, AI_URL } from './config';
@@ -42,7 +42,7 @@ function Game({ game, token, onExit, onLogout }) {
   const scrollAreaRef = useRef(null);
 
   // Calculate token statistics locally from available data
-  const calculateTokenStats = () => {
+  const calculateTokenStats = useCallback(() => {
     const maxHistoryTokens = game.tokenize_threshold || 850;
     const maxTokenizedChunks = game.max_tokenized_history_block || 6;
 
@@ -80,13 +80,13 @@ function Game({ game, token, onExit, onLogout }) {
       deep_history_tokens: deepHistoryTokens,
       deep_history_entries: deepHistoryEntries
     };
-  };
+  }, [localHistory, localTokenized, localDeepHistory, game]);
 
   // Update token stats whenever history, tokenized history, or deep history changes
   useEffect(() => {
     const stats = calculateTokenStats();
     setTokenStats(stats);
-  }, [localHistory, localTokenized, localDeepHistory, game]);
+  }, [calculateTokenStats]);
 
   // Scroll to bottom whenever history changes
   useEffect(() => {
@@ -433,8 +433,8 @@ function Game({ game, token, onExit, onLogout }) {
   }, [actionMode]);
 
   // Calculate stats
-  const totalTokenizedChunks = tokenizedHistory.length;
-  const committedToDeepMemory = localDeepHistory.reduce((sum, block) => sum + (block.chunks_merged || 0), 0);
+  // const totalTokenizedChunks = tokenizedHistory.length;
+  // const committedToDeepMemory = localDeepHistory.reduce((sum, block) => sum + (block.chunks_merged || 0), 0);
 
   return (
     <div className="game-screen">
