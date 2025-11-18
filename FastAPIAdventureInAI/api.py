@@ -1,15 +1,25 @@
-from dtos import UserDTO, WorldDTO, GameRatingDTO, HistoryDTO, TokenizedHistoryDTO, SavedGameDTO, DeepMemoryDTO
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime, timedelta
 import uuid
+from argon2 import PasswordHasher, exceptions
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from argon2 import PasswordHasher, exceptions
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, create_engine
+from typing import List, Optional
+import uvicorn
 
+from ai_client_requests import ai_count_tokens, ai_summarize_chunk
+from ai_settings import get_memory_limits, get_setting
+from schemas_api import *
+from models import Base, User, World, GameRating, SavedGame, TokenizedHistory, StoryHistory, DeepMemory, Session as SessionModel
+from dtos import UserDTO, WorldDTO, GameRatingDTO, HistoryDTO, TokenizedHistoryDTO, SavedGameDTO, DeepMemoryDTO
+from config import DATABASE_URL, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, CORS_ORIGINS
+from aiadventureinpythonconstants import MAX_WORLD_TOKENS
+from token_utils import count_tokens_batch
 from converters import (
     user_to_dto,
     world_to_dto,
@@ -18,14 +28,6 @@ from converters import (
     tokenized_history_to_dto,
     saved_game_to_dto
 )
-from models import Base, User, World, GameRating, SavedGame, TokenizedHistory, StoryHistory, DeepMemory, Session as SessionModel
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-# Import configuration from environment
-from config import DATABASE_URL, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, CORS_ORIGINS
-from aiadventureinpythonconstants import MAX_WORLD_TOKENS
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -34,8 +36,6 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 # CORS middleware
-from fastapi.middleware.cors import CORSMiddleware
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -69,9 +69,8 @@ def get_password_hash(password):
     return ph.hash(password)
 
 def create_access_token(data: dict, expires_delta=None):
-    from datetime import datetime, timedelta
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(datetime.timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -83,50 +82,6 @@ def authenticate_user(db: Session, username: str, password: str):
     if not user or not verify_password(password, user.password_hash):
         return None
     return user
-
-# Pydantic schemas
-class UserCreate(BaseModel):
-    username: str
-    email: Optional[str] = None
-    password: str
-
-class UserRegister(BaseModel):
-    username: str
-    email: Optional[str] = None
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class HistoryIn(BaseModel):
-    entry: str
-
-class TokenizedHistoryIn(BaseModel):
-    start_index: int
-    end_index: int
-    summary: str
-
-class SavedGameCreate(BaseModel):
-    user_id: int
-    world_id: int
-    rating_id: int
-    player_name: str
-    player_gender: str
-    history: Optional[List[HistoryIn]] = None
-    tokenized_history: Optional[List[TokenizedHistoryIn]] = None
-
-class SavedGameIdResponse(BaseModel):
-    id: int
-
-class DeepMemoryCreate(BaseModel):
-    saved_game_id: int
-    summary: str = ""
-
-# Dependency to get current user from token
-from fastapi import status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -148,7 +103,7 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
 
 # User endpoints
 @app.post("/users/", response_model=UserDTO)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = User(username=user.username, email=user.email)
     db.add(db_user)
     db.commit()
@@ -156,14 +111,14 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     return db_user
 
 @app.get("/users/{user_id}", response_model=UserDTO)
-def get_user(user_id: int, db: Session = Depends(get_db)):
+async def get_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user_to_dto(user)  # Use converter
 
 @app.get("/users/by_username/{username}", response_model=UserDTO)
-def get_user_by_username_endpoint(
+async def get_user_by_username_endpoint(
     username: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -175,12 +130,12 @@ def get_user_by_username_endpoint(
 
 # Worlds and Ratings
 @app.get("/worlds/", response_model=List[WorldDTO])
-def list_worlds(db: Session = Depends(get_db)):
+async def list_worlds(db: Session = Depends(get_db)):
     worlds = db.query(World).all()
     return [world_to_dto(w, calculate_tokens=False) for w in worlds]
 
 @app.get("/users/me/worlds/", response_model=List[WorldDTO])
-def list_my_worlds(
+async def list_my_worlds(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -189,14 +144,12 @@ def list_my_worlds(
     return [world_to_dto(w, calculate_tokens=True) for w in worlds]
 
 @app.post("/worlds/", response_model=WorldDTO, status_code=201)
-def create_world(
+async def create_world(
     world_data: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Create a new world for the current user."""
-    from token_utils import count_tokens_batch
-    from ai_settings import get_setting
     # Check if world name already exists
     existing = db.query(World).filter(World.name == world_data["name"]).first()
     if existing:
@@ -225,15 +178,13 @@ def create_world(
     return world_to_dto(new_world, calculate_tokens=False)
 
 @app.patch("/worlds/{world_id}", response_model=WorldDTO)
-def update_world(
+async def update_world(
     world_id: int,
     world_data: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Update an existing world. Only the owner can update."""
-    from token_utils import count_tokens_batch
-    from ai_settings import get_setting
     world = db.query(World).filter(World.id == world_id).first()
     if not world:
         raise HTTPException(status_code=404, detail="World not found")
@@ -269,7 +220,7 @@ def update_world(
     return world_to_dto(world, calculate_tokens=False)
 
 @app.delete("/worlds/{world_id}", status_code=204)
-def delete_world(
+async def delete_world(
     world_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -286,12 +237,12 @@ def delete_world(
     return None
 
 @app.get("/game_ratings/", response_model=List[GameRatingDTO])
-def list_game_ratings(db: Session = Depends(get_db)):
+async def list_game_ratings(db: Session = Depends(get_db)):
     return db.query(GameRating).all()
 
 # Saved Games
 @app.get("/saved_games/{game_id}", response_model=SavedGameDTO)
-def get_saved_game(
+async def get_saved_game(
     game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -310,7 +261,6 @@ def get_saved_game(
     # Convert to DTOs
     history_dtos = [HistoryDTO.model_validate(h) for h in history]
     tokenized_history_dtos = [TokenizedHistoryDTO.model_validate(th) for th in tokenized_history]
-    from dtos import DeepMemoryDTO
     deep_history_dtos = [DeepMemoryDTO.model_validate(d) for d in deep_history]
 
     # Build and return the DTO, now including deep_history
@@ -319,7 +269,7 @@ def get_saved_game(
     return dto
 
 @app.get("/users/{user_id}/saved_games/", response_model=List[SavedGameDTO])
-def list_user_saved_games(
+async def list_user_saved_games(
     user_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -355,7 +305,7 @@ def list_user_saved_games(
 
 # Tokenized History
 @app.get("/saved_games/{game_id}/tokenized_history/", response_model=List[TokenizedHistoryDTO])
-def list_tokenized_history(
+async def list_tokenized_history(
     game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -371,15 +321,8 @@ def list_tokenized_history(
 
 
 # Deep Memory Endpoints
-class DeepMemoryUpdate(BaseModel):
-    summary: str
-
-class DeepMemoryCreate(BaseModel):
-    saved_game_id: int
-    summary: str = ""
-
 @app.get("/saved_games/{game_id}/deep_memory/")
-def get_deep_memory(
+async def get_deep_memory(
     game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -403,7 +346,7 @@ def get_deep_memory(
     }
 
 @app.post("/deep_memory/")
-def create_deep_memory(
+async def create_deep_memory(
     deep_memory: DeepMemoryCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -411,8 +354,6 @@ def create_deep_memory(
     """
     Create a new DeepMemory entry for a saved game.
     """
-    from ai_client_requests import ai_count_tokens
-
     game = db.query(SavedGame).filter(SavedGame.id == deep_memory.saved_game_id).first()
     if not game or game.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden: not your saved game")
@@ -444,7 +385,7 @@ def create_deep_memory(
     }
 
 @app.put("/deep_memory/{deep_memory_id}")
-def update_deep_memory(
+async def update_deep_memory(
     deep_memory_id: int,
     update: DeepMemoryUpdate,
     db: Session = Depends(get_db),
@@ -454,8 +395,6 @@ def update_deep_memory(
     Update the deep memory summary (for manual editing).
     Recalculates token count automatically.
     """
-    from ai_client_requests import ai_count_tokens
-
     deep_memory = db.query(DeepMemory).filter(DeepMemory.id == deep_memory_id).first()
     if not deep_memory:
         raise HTTPException(status_code=404, detail="Deep memory not found")
@@ -487,7 +426,7 @@ def update_deep_memory(
     }
 
 @app.get("/saved_games/{game_id}/token_stats")
-def get_token_stats(
+async def get_token_stats(
     game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -497,8 +436,6 @@ def get_token_stats(
     - active_tokens: Tokens sent to AI (recent MAX_TOKENIZED_HISTORY_BLOCK chunks + up to TOKENIZE_THRESHOLD tokens of recent history)
     - total_tokens: All tokens in all history entries
     """
-    from ai_settings import get_setting
-    
     game = db.query(SavedGame).filter(SavedGame.id == game_id).first()
     if not game or game.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden: not your saved game")
@@ -549,7 +486,7 @@ def get_token_stats(
 
 # Register endpoint (with password hashing)
 @app.post("/register/", response_model=UserDTO)
-def register(user: UserRegister, db: Session = Depends(get_db)):
+async def register(user: UserRegister, db: Session = Depends(get_db)):
     if get_user_by_username(db, user.username):
         raise HTTPException(status_code=400, detail="Username already registered")
     hashed_password = get_password_hash(user.password)
@@ -561,7 +498,7 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
 
 # Login endpoint (returns JWT token)
 @app.post("/token", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
@@ -585,10 +522,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
     return {"access_token": access_token, "token_type": "bearer"}
 
-from fastapi import status
-
 @app.put("/saved_games/{game_id}", response_model=SavedGameDTO)
-def update_saved_game(
+async def update_saved_game(
     game_id: int,
     game_data: SavedGameCreate,
     db: Session = Depends(get_db),
@@ -611,7 +546,7 @@ def update_saved_game(
     return game
 
 @app.post("/saved_games/", response_model=SavedGameIdResponse, status_code=201)
-def create_saved_game(
+async def create_saved_game(
     game_data: SavedGameCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -660,7 +595,7 @@ def create_saved_game(
     return {"id": new_game.id}
 
 @app.delete("/saved_games/{game_id}", response_model=dict)
-def delete_saved_game(
+async def delete_saved_game(
     game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -675,7 +610,7 @@ def delete_saved_game(
     return {"detail": "Saved game deleted"}
 
 @app.get("/history/{saved_game_id}", response_model=List[HistoryDTO])
-def get_history_for_saved_game(
+async def get_history_for_saved_game(
     saved_game_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -689,7 +624,7 @@ def get_history_for_saved_game(
     return [history_to_dto(h) for h in history_entries]
 
 @app.post("/history/", response_model=HistoryDTO, status_code=201)
-def create_history_entry(
+async def create_history_entry(
     history_data: HistoryIn,
     saved_game_id: int,
     db: Session = Depends(get_db),
@@ -704,7 +639,7 @@ def create_history_entry(
         saved_game_id=saved_game_id,
         entry_index=next_entry_index,
         text=history_data.entry,  # <-- CORRECT
-        created_at=datetime.utcnow()
+        created_at=datetime.now(datetime.timezone.utc)
     )
     db.add(new_history)
     db.commit()
@@ -728,10 +663,6 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
     - Mark history entries as tokenized and track references
     - Refine the most recent tokenized chunk when new tokens are added to it
     """
-    from ai_settings import get_memory_limits, get_setting
-    from token_utils import count_tokens_batch
-    from ai_client_requests import ai_summarize_chunk
-    
     limits = get_memory_limits(db)
     TOKENIZE_THRESHOLD = get_setting('TOKENIZE_THRESHOLD', db)  # 800 tokens triggers compression
     TOKENIZED_HISTORY_BLOCK_SIZE = get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)  # 200 tokens per chunk
@@ -844,9 +775,6 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
     When tokenized chunks exceed MAX_TOKENIZED_HISTORY_BLOCK, merge oldest chunks into deep memory.
     This keeps the tokenized history manageable while preserving ancient story context.
     """
-    from ai_settings import get_setting
-    from token_utils import count_tokens_batch
-    
     MAX_TOKENIZED_HISTORY_BLOCK = get_setting('MAX_TOKENIZED_HISTORY_BLOCK', db)
     DEEP_MEMORY_MAX_TOKENS = get_setting('DEEP_MEMORY_MAX_TOKENS', db)
     
@@ -905,8 +833,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         + "\n\n---\n\n".join(summaries_to_merge)
     )
     
-    # Use AI to compress (reuse summarize endpoint with custom prompt)
-    from ai_client_requests import ai_summarize_chunk
+    # Use AI to compress (reuse summarize endpoint with custom prompt)    
     # Pass the combined summaries as a single chunk
     deep_summary = ai_summarize_chunk([prompt], max_tokens=DEEP_MEMORY_MAX_TOKENS, previous_summary=None, username=username)
     deep_token_count = count_tokens_batch([deep_summary])[0]
@@ -951,7 +878,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
     print(f"{'='*80}\n")
 
 @app.delete("/history/{history_id}", response_model=dict)
-def delete_history_entry(
+async def delete_history_entry(
     history_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -989,14 +916,12 @@ def delete_history_entry(
     return {"detail": "History entry deleted"}
 
 @app.put("/history/{history_id}", response_model=HistoryDTO)
-def update_history_entry(
+async def update_history_entry(
     history_id: int,
     update_data: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from token_utils import count_tokens_batch
-    
     history_entry = db.query(StoryHistory).filter(StoryHistory.id == history_id).first()
     if not history_entry:
         raise HTTPException(status_code=404, detail="History entry not found")
@@ -1017,7 +942,7 @@ def update_history_entry(
     return HistoryDTO.model_validate(history_entry)
 
 @app.post("/tokenized_history/", response_model=TokenizedHistoryDTO, status_code=201)
-def create_tokenized_history_entry(
+async def create_tokenized_history_entry(
     th_data: TokenizedHistoryIn,
     saved_game_id: int,
     db: Session = Depends(get_db),
@@ -1039,14 +964,12 @@ def create_tokenized_history_entry(
     return tokenized_history_to_dto(new_th)
 
 @app.put("/tokenized_history/{tokenized_id}", response_model=TokenizedHistoryDTO)
-def update_tokenized_history_entry(
+async def update_tokenized_history_entry(
     tokenized_id: int,
     update_data: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from token_utils import count_tokens_batch
-    
     tokenized_entry = db.query(TokenizedHistory).filter(TokenizedHistory.id == tokenized_id).first()
     if not tokenized_entry:
         raise HTTPException(status_code=404, detail="Tokenized history entry not found")
@@ -1071,7 +994,7 @@ def update_tokenized_history_entry(
     return tokenized_history_to_dto(tokenized_entry)
 
 @app.delete("/tokenized_history/{tokenized_id}")
-def delete_tokenized_history_entry(
+async def delete_tokenized_history_entry(
     tokenized_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -1090,5 +1013,4 @@ def delete_tokenized_history_entry(
     return {"detail": "Tokenized history entry deleted"}
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)

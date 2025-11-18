@@ -12,30 +12,6 @@ GAME_RATING_PROMPTS = (
 
 # Story setups
 STORY_SETUPS = {
-    # "Final Fantasy Hub": {
-    #     "preface": (
-    #         "You step into a grand hall shimmering with banners from every world, the air alive with voices and soft music. "
-    #         "Near the entrance, Barrett keeps a watchful eye, his mechanical arm gleaming as he chats with Tifa, who offers guests a welcoming smile.\n\n"
-    #         "A blitzball spins lazily in Tidus's hands as laughter ripples through the crowd, while Lulu observes with quiet amusement, her staff glowing faintly in the candlelight. "
-    #         "Rikku weaves through the gathering, pulling Paine toward a table laden with drinks, their banter blending with the hum of conversation.\n\n"
-    #         "Lightning lingers near the bar, her posture relaxed as Snow raises a glass in toast, drawing cheers from nearby companions. "
-    #         "Oerba Yun Fang joins them, leaning casually against a column, her voice carrying easily over the music as she trades stories with passing guests.\n\n"
-    #         "From another corner, Lasswell and Fina arrive, their armor catching the glow of the crystal centerpiece. "
-    #         "Fina's aura radiates calm as she speaks of visions, while Lid tinkers with a curious device that buzzes softly beside the refreshments.\n\n"
-    #         "'This hub is more than a gathering,' Lulu murmurs, her tone warm. 'It is a convergence of fate.' "
-    #         "The reactors, the fayth, the fal'Cie, and the crystals all hum in resonance, blending with the music and laughter as the event unfolds, your role woven into every world at once."
-    #     ),
-    #     "world_tokens": (
-    #         "The Hub unites all Final Fantasy realms, each echoing its own destiny. Gaia struggles under Shinra's reactors, materia glowing with Mako's lifeblood. "
-    #         "Spira endures Sin's shadow, summoners bound to fayth and aeons. Cocoon floats above Pulse, fal'Cie branding l'Cie with Focus and fate. "
-    #         "Ivalice thrives on war and politics, Judges enforcing law while crystals shape kingdoms. Hydaelyn and Eorzea pulse with Aether, primals summoned by faith and conflict. "
-    #         "Gran Pulse, Midgar, Zanarkand, Luca, Baron, Alexandria, and countless cities resonate together, their artifacts-materia, spheres, crystals, dresspheres, Garment Grids, Crystarium paths-intertwining. "
-    #         "Time and reality fracture, timelines collapsing into one convergence. This new world emerges luminous and unstable, but its birth erodes the home realms, unraveling destinies once secure. "
-    #         "Characters are always described with vivid detail-armor gleaming under crystal light, robes trailing shadows, laughter masking grief, eyes betraying lineage and resolve-anchoring their presence in the scene. "
-    #         "Surroundings remain alive in every moment-banners snapping overhead, crystal centerpieces glowing, machina engines humming beneath the floor, ocean winds drifting through open arches-woven into dialogue and action. "
-    #         "Interactions reveal personality through gesture, attire, and tone, ensuring the Hub feels cinematic, layered, and unrelenting in its convergence of worlds."
-    #     )
-    # },
     "Terminator Nexus": {
         "preface": (
             "The Hub flickers with cold blue light, its crystal centerpiece now threaded with streams of binary code. "
@@ -77,32 +53,7 @@ STORY_SETUPS = {
             "Surroundings remain alive—engines revving, sandstorms howling, banners snapping from war rigs—woven into dialogue and action. "
             "Interactions reveal desperation through barter, betrayal, and battle cries, ensuring the Wasteland feels cinematic, layered, and unrelenting."
         )
-    },
-    "Chrono Trigger Convergence": {
-        "preface": (
-                "Lanterns drift above the festival square, their warm glow washing over the celebrations that follow Lavos’s defeat. "
-                "Near the fountain, Marle leans in with a teasing grin, her pendant scattering light across the water as Crono tries—and fails—to hide a smile. "
-                "Sparks jump from Lucca’s device a few stalls away, drawing cheers as she lifts her goggles and claims it was all part of the demonstration. "
-                "A polished salute from Frog catches the lanternlight as mugs clink in response, while Robo’s sensors hum pleasantly as he records every joyful detail. "
-                "Bellowing laughter rolls through the square when Ayla challenges anyone brave enough to arm-wrestle her, sending onlookers scrambling for safety.\n\n"
-                "A shift in the air stills the festivities. "
-                "Lanterns tremble as a ripple of light coils into a time gate at the plaza’s heart, its glow cutting through music and chatter alike. "
-                "The crowd freezes just as you burst through, tumbling onto the stones with a thud that echoes across the square. "
-                "Crono’s hand tightens on his sword, Marle startles back, Lucca fumbles for her tools, Frog steadies his footing, Robo’s readings spike, and Ayla leans forward with intrigued approval. "
-                "From the edge of the plaza, Magus steps into view at last, cloak trailing behind him as his gaze narrows on you. "
-                "The tension breaks when Lucca groans, ‘Don’t tell me time’s acting up again.’ "
-                "A ripple of relieved laughter follows, the music stirs back to life, and curious whispers rise as the festival absorbs its newest—and most unexpected—guest."
-        ),
-        "world_tokens": (
-            "The Convergence binds all Chrono Trigger eras in celebration, each echoing its own destiny. "
-            "Prehistoric plains roar with laughter, medieval castles ring with feasts, futuristic domes hum with fireworks, and apocalyptic wastelands lie healed under starlight. "
-            "Artifacts intertwine—time gates, Epoch engines, pendants, Masamune blades, Zeal relics—each resonating with the festival’s joy. "
-            "Characters are described with vivid detail—Crono’s sword gleaming under lantern light, Marle’s pendant glowing with resonance, Lucca’s goggles flashing sparks, Frog’s blade polished in salute, Robo’s frame humming with energy, Ayla’s laughter masking primal strength, Magus’s cloak trailing shadows. "
-            "Surroundings remain alive—time portals shimmering, banners snapping across eras, machinery humming beneath the fairgrounds, winds drifting through fractured timelines—woven into dialogue and action. "
-            "Interactions reveal personality through gesture, attire, and tone, ensuring the Convergence feels cinematic, layered, and unrelenting in its celebration of victory and the shock of new arrivals."
-        )
-        }
-
+    }
 }
 
 

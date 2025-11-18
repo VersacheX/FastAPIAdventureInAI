@@ -1,3 +1,5 @@
+import asyncio
+import uvicorn
 import random
 from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -6,6 +8,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import jwt
 from jwt.exceptions import InvalidTokenError
+
+from starlette.concurrency import run_in_threadpool
 
 # Import your AI model setup and logic here
 from gptqmodel.models import GPTQModel
@@ -16,6 +20,8 @@ from ai_settings import get_ai_settings
 
 # Import configuration from environment
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
+
+from schemas_ai_server import *
 
 # Load settings once at startup
 _AI_SETTINGS = get_ai_settings()
@@ -91,38 +97,14 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             detail="Could not validate credentials",
         )
 
-class GenerateStoryRequest(BaseModel):
-    context: Dict
-    user_input: Optional[str] = ""
-    include_initial: Optional[bool] = False
-
-class GenerateFromGameRequest(BaseModel):
-    player_name: str
-    player_gender: str
-    world_name: str
-    world_tokens: Optional[str] = ""
-    rating_name: str
-    story_splitter: Optional[str] = "###"
-    story_preface: Optional[str] = ""
-    history: List[str]
-    tokenized_history: List[Dict]
-    deep_memory: Optional[str] = None
-    user_input: str
-    action_mode: Optional[str] = "ACTION"
-    include_initial: Optional[bool] = False
-
-class SummarizeChunkRequest(BaseModel):
-    chunk: List[str]
-    max_tokens: int
-    previous_summary: Optional[str] = None
-
 @app.post("/prime_narrator/")
-def prime_narrator(username: str = Depends(verify_token)):
-    inputs = STORY_TOKENIZER("Prime the narrator.", return_tensors="pt").to("cuda")
-    _ = STORY_GENERATOR.generate(
-        **inputs,
-        max_new_tokens=1,
-        num_return_sequences=1
+async def prime_narrator(username: str = Depends(verify_token)):
+    inputs = await run_in_threadpool(STORY_TOKENIZER("Prime the narrator.", return_tensors="pt").to("cuda"))
+    _ = await run_in_threadpool(
+        STORY_GENERATOR.generate,
+            **inputs,
+            max_new_tokens=1,
+            num_return_sequences=1
     )
     return {"status": "primed"}
 
@@ -180,7 +162,7 @@ def flatten_json_prompt(json_data):
     return prompt
 
 @app.post("/generate_story/")
-def generate_story(request: GenerateStoryRequest, username: str = Depends(verify_token)):
+async def generate_story(request: GenerateStoryRequest, username: str = Depends(verify_token)):
     # Set random seed for reproducibility
     set_seed(random.randint(0, 2**32 - 1))
 
@@ -191,19 +173,20 @@ def generate_story(request: GenerateStoryRequest, username: str = Depends(verify
     # Build prompt (GAME_DIRECTIVE removed - redundant)
     prompt = flatten_json_prompt(context)
 
-    inputs = STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda")
+    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
     prompt_token_count = inputs.input_ids.shape[-1]
 
     max_retries = 15
     text = ""
     for attempt in range(1, max_retries + 1):
-        output = STORY_GENERATOR.generate(
-            **inputs,
-            max_new_tokens=RESERVED_FOR_GENERATION,
-            num_return_sequences=1,
-            temperature=0.8,
-            top_p=0.9,
-            repetition_penalty=1.2
+        output = await run_in_threadpool(STORY_GENERATOR.generate(
+                **inputs,
+                max_new_tokens=RESERVED_FOR_GENERATION,
+                num_return_sequences=1,
+                temperature=0.8,
+                top_p=0.9,
+                repetition_penalty=1.2
+            )
         )
         # Decode only the newly generated tokens, not the prompt
         generated_tokens = output[0][prompt_token_count:]
@@ -238,7 +221,7 @@ def generate_story(request: GenerateStoryRequest, username: str = Depends(verify
     return {"story": text.strip()}
 
 @app.post("/generate_from_game/")
-def generate_from_game(request: GenerateFromGameRequest, username: str = Depends(verify_token)):
+async def generate_from_game(request: GenerateFromGameRequest, username: str = Depends(verify_token)):
     """
     Accepts game data directly and builds structured JSON before generating story.
     This endpoint is designed for React clients to call directly.
@@ -278,19 +261,20 @@ def generate_from_game(request: GenerateFromGameRequest, username: str = Depends
     # print(prompt)
     # print("="*80 + "\n")
 
-    inputs = STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda")
+    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
     prompt_token_count = inputs.input_ids.shape[-1]
     
     max_retries = 15
     text = ""
     for attempt in range(1, max_retries + 1):
-        output = STORY_GENERATOR.generate(
-            **inputs,
-            max_new_tokens=RESERVED_FOR_GENERATION,
-            num_return_sequences=1,
-            temperature=0.8,
-            top_p=0.9,
-            repetition_penalty=1.2
+        output = await run_in_threadpool(STORY_GENERATOR.generate(
+                **inputs,
+                max_new_tokens=RESERVED_FOR_GENERATION,
+                num_return_sequences=1,
+                temperature=0.8,
+                top_p=0.9,
+                repetition_penalty=1.2
+            )
         )
         # Decode only the newly generated tokens, not the prompt
         generated_tokens = output[0][prompt_token_count:]
@@ -325,7 +309,7 @@ def generate_from_game(request: GenerateFromGameRequest, username: str = Depends
     return {"story": text.strip()}
 
 @app.post("/summarize_chunk/")
-def summarize_chunk(request: SummarizeChunkRequest, username: str = Depends(verify_token)):
+async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depends(verify_token)):
     chunk = request.chunk
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
@@ -371,14 +355,15 @@ def summarize_chunk(request: SummarizeChunkRequest, username: str = Depends(veri
     print("="*80 + "\n")
     
     # Single attempt - accept whatever concise summary the AI produces
-    inputs = STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda")
-    summary_output = STORY_GENERATOR.generate(
-        **inputs,
-        max_new_tokens=max_tokens,
-        num_return_sequences=1,
-        temperature=0.6,
-        top_p=0.75,
-        repetition_penalty=1.1
+    inputs = await run_in_threadpool(STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
+    summary_output = await run_in_threadpool(STORY_GENERATOR.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            num_return_sequences=1,
+            temperature=0.6,
+            top_p=0.75,
+            repetition_penalty=1.1
+        )
     )
     summary_text = STORY_TOKENIZER.decode(summary_output[0], skip_special_tokens=True)
 
@@ -398,20 +383,19 @@ def summarize_chunk(request: SummarizeChunkRequest, username: str = Depends(veri
     return {"summary": summary_text}
 
 @app.post("/count_tokens/")
-def count_tokens(request: Request, username: str = Depends(verify_token)):
+async def count_tokens(request: Request, username: str = Depends(verify_token)):
     """Count tokens in a single text string."""
     import asyncio
-    body = asyncio.run(request.json())
+    body = await request.json()
     text = body.get("text", "")
     
     tokens = STORY_TOKENIZER.encode(text)
     return {"token_count": len(tokens)}
 
 @app.post("/count_tokens_batch/")
-def count_tokens_batch(request: Request, username: str = Depends(verify_token)):
+async def count_tokens_batch(request: Request, username: str = Depends(verify_token)):
     """Count tokens for multiple texts."""
-    import asyncio
-    body = asyncio.run(request.json())
+    body = await request.json()
     texts = body.get("texts", [])
     
     token_counts = []
@@ -421,6 +405,5 @@ def count_tokens_batch(request: Request, username: str = Depends(verify_token)):
     
     return {"token_counts": token_counts}
 
-if __name__ == "__main__":
-    import uvicorn
+if __name__ == "__main__":    
     uvicorn.run(app, host="0.0.0.0", port=9000)
