@@ -348,3 +348,14 @@ I welcome all ideas to improve the project!
 Project created and maintained by Jessie Lulham.
 
 For suggestions or feedback, email: lulhamjessie@aol.com
+
+## PyTorch & CUDA Setup
+
+This project uses PyTorch with CUDA 12.6 for GPU acceleration.
+
+**Recommended installation for CUDA 12.6:**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+```
+
+If you use a different CUDA version, visit the [PyTorch Get Started page](https://pytorch.org/get-started/locally/) for the correct installation command.
