@@ -34,7 +34,7 @@ class HistoryDTO(BaseModel):
     id: int
     saved_game_id: int
     entry_index: int
-    entry: str = Field(..., alias="text")  # Use alias if model uses 'text'
+    text: str = Field(..., alias="entry")  # Model uses 'text', API uses 'entry'
     token_count: Optional[int] = None
     is_tokenized: bool = Field(default=False)
 

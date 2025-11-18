@@ -38,14 +38,13 @@ async def get_saved_game(
     tokenized_history = db.query(TokenizedHistory).filter(TokenizedHistory.saved_game_id == game_id).all()
     deep_history = db.query(DeepMemory).filter(DeepMemory.saved_game_id == game_id).all()
 
-    # Convert to DTOs
-    history_dtos = [HistoryDTO.model_validate(h) for h in history]
-    tokenized_history_dtos = [TokenizedHistoryDTO.model_validate(th) for th in tokenized_history]
-    deep_history_dtos = [DeepMemoryDTO.model_validate(d) for d in deep_history]
-
     # Build and return the DTO, now including deep_history
     dto = saved_game_to_dto(game, history, tokenized_history, db)
+    
+    # Convert deep memory to DTOs and add to the DTO
+    deep_history_dtos = [DeepMemoryDTO.model_validate(d) for d in deep_history]
     dto.deep_history = deep_history_dtos
+    
     return dto
 
 

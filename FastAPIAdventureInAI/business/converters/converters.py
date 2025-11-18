@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from business.models import User, World, GameRating, SavedGame, StoryHistory, TokenizedHistory
 from business.dtos import UserDTO, WorldDTO, GameRatingDTO, SavedGameDTO, HistoryDTO, TokenizedHistoryDTO
 
@@ -31,7 +31,7 @@ def history_to_dto(history: StoryHistory) -> HistoryDTO:
         id=history.id,
         saved_game_id=history.saved_game_id,
         entry_index=history.entry_index,
-        entry=history.text,
+        text=history.text,
         token_count=history.token_count,
         is_tokenized=bool(history.is_tokenized)
     )
@@ -41,9 +41,9 @@ def tokenized_history_to_dto(th: TokenizedHistory) -> TokenizedHistoryDTO:
 
 def saved_game_to_dto(game: SavedGame, history_list, tokenized_history_list, db=None) -> SavedGameDTO:
     # Import here to avoid circular import issues if any
-    from models import World, GameRating
-    from dtos import SavedGameDTO
-    from ai_settings import get_setting
+    from business.models import World, GameRating
+    from business.dtos import SavedGameDTO
+    from ai.ai_settings import get_ai_settings
 
     # Fetch world and rating names and details
     world_name = ""
@@ -78,26 +78,11 @@ def saved_game_to_dto(game: SavedGame, history_list, tokenized_history_list, db=
         story_splitter = "###"
 
     # Get game settings
-    max_tokenized_history_block = get_setting('MAX_TOKENIZED_HISTORY_BLOCK', db) if db else 6
-    tokenize_threshold = get_setting('TOKENIZE_THRESHOLD', db) if db else 800
-    tokenized_history_block_size = get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db) if db else 200
+    # Use default values since settings are game-specific and we don't have all context here
+    max_tokenized_history_block = 6
+    tokenize_threshold = 800
+    tokenized_history_block_size = 200
     
-    # Fetch deep memory for this saved game
-    deep_memory_obj = None
-    if db:
-        from models import DeepMemory
-        deep_memory = db.query(DeepMemory).filter(DeepMemory.saved_game_id == game.id).first()
-        if deep_memory:
-            # Convert to dict for DTO
-            deep_memory_obj = {
-                'id': deep_memory.id,
-                'saved_game_id': deep_memory.saved_game_id,
-                'summary': deep_memory.summary,
-                'token_count': deep_memory.token_count,
-                'chunks_merged': deep_memory.chunks_merged,
-                'created_at': deep_memory.created_at.isoformat() if deep_memory.created_at else None,
-                'updated_at': deep_memory.updated_at.isoformat() if deep_memory.updated_at else None
-            }
     return SavedGameDTO(
         id=game.id,
         user_id=game.user_id,
@@ -118,7 +103,7 @@ def saved_game_to_dto(game: SavedGame, history_list, tokenized_history_list, db=
         tokenized_history_block_size=tokenized_history_block_size,
         created_at=game.created_at,
         updated_at=game.updated_at,
-        deep_memory=deep_memory_obj
+        deep_history=None  # Will be set by the endpoint
     )
 
 # def convert_history(saved_game_id, history_list):

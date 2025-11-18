@@ -169,38 +169,27 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
         
         # Check if we should merge with the latest chunk (if it's less than 90% full)
         should_merge = False
-        chunk_entries = untokenized
+        chunk_entries = untokenized  # Always start with just the new untokenized entries
         
         if latest_tokenized and latest_tokenized.token_count:
             # Calculate if the latest chunk is less than 90% of target size
             utilization = latest_tokenized.token_count / TOKENIZED_HISTORY_BLOCK_SIZE
             if utilization < 0.9:
                 should_merge = True
-                # Get the history entries referenced by the latest chunk
-                if latest_tokenized.history_references:
-                    ref_ids = [int(id.strip()) for id in latest_tokenized.history_references.split(',')]
-                    ref_entries = db.query(StoryHistory).filter(StoryHistory.id.in_(ref_ids)).all()
-                    # Merge: old chunk entries + new untokenized entries
-                    chunk_entries = ref_entries + untokenized
+                # We'll use the existing summary as context, not re-summarize the old entries
         
-        # Summarize the chunk (either merged or new)
-        # Get previous chunk summary for context (not the one we're updating)
+        # Summarize the NEW entries only
+        # Get previous chunk summary for context
         previous_summary = None
-        if should_merge:
-            # When merging, get the chunk BEFORE the one we're updating
-            previous_chunk = db.query(TokenizedHistory).filter(
-                TokenizedHistory.saved_game_id == saved_game_id,
-                TokenizedHistory.end_index < latest_tokenized.start_index
-            ).order_by(TokenizedHistory.end_index.desc()).first()
-            if previous_chunk:
-                previous_summary = previous_chunk.summary
-        else:
+        if should_merge and latest_tokenized:
+            # Use the existing chunk's summary as context for the new summary
+            previous_summary = latest_tokenized.summary
+        elif latest_tokenized:
             # When creating new chunk, use the latest existing chunk as context
-            if latest_tokenized:
-                previous_summary = latest_tokenized.summary
+            previous_summary = latest_tokenized.summary
         
         chunk_text = [e.text for e in chunk_entries]
-        summary, summary_token_count = summarize_history_chunk(
+        new_summary, new_summary_token_count = summarize_history_chunk(
             chunk_text,
             TOKENIZED_HISTORY_BLOCK_SIZE,
             previous_summary=previous_summary,
@@ -208,8 +197,42 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
         )
         
         # Create history references string
-        history_ids = [str(e.id) for e in chunk_entries]
-        history_references = ','.join(history_ids)
+        if should_merge and latest_tokenized:
+            # When merging, combine old summary with new summary
+            if latest_tokenized.summary:
+                # Append new summary to old summary
+                combined_summary = f"{latest_tokenized.summary}\n{new_summary}"
+                combined_token_count = latest_tokenized.token_count + new_summary_token_count
+            else:
+                combined_summary = new_summary
+                combined_token_count = new_summary_token_count
+            
+            # Check if combined summary exceeds the block size limit
+            if combined_token_count > TOKENIZED_HISTORY_BLOCK_SIZE:
+                # Combined summary is too large - create a new chunk instead
+                should_merge = False
+                print(f"Combined summary would be {combined_token_count} tokens (limit: {TOKENIZED_HISTORY_BLOCK_SIZE}), creating new chunk instead")
+                summary = new_summary
+                summary_token_count = new_summary_token_count
+                history_references = ','.join([str(e.id) for e in chunk_entries])
+            else:
+                # Combined summary fits - use it for the merge
+                summary = combined_summary
+                summary_token_count = combined_token_count
+                
+                # Include both old and new entry IDs
+                if latest_tokenized.history_references:
+                    old_ids = latest_tokenized.history_references.split(',')
+                    new_ids = [str(e.id) for e in chunk_entries]
+                    all_ids = old_ids + new_ids
+                    history_references = ','.join(all_ids)
+                else:
+                    history_references = ','.join([str(e.id) for e in chunk_entries])
+        else:
+            # Not merging - use new summary as-is
+            summary = new_summary
+            summary_token_count = new_summary_token_count
+            history_references = ','.join([str(e.id) for e in chunk_entries])
         
         if should_merge and latest_tokenized:
             # Update existing chunk with merged content

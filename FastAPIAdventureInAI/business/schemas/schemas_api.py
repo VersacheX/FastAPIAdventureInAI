@@ -32,15 +32,16 @@ class TokenizedHistoryIn(BaseModel):
     summary: str
 
 class SavedGameCreate(BaseModel):
+    user_id: int
+    world_id: int
+    rating_id: int
     player_name: str
-    world_name: str
-    rating_name: str
-    history: List[str]
-    tokenized_history: List[Dict]
-    deep_memory: Optional[str] = None
+    player_gender: str
+    history: Optional[List[HistoryEntryIn]] = None
+    tokenized_history: Optional[List[Dict]] = None
 
 class SavedGameIdResponse(BaseModel):
-    game_id: str
+    id: int  # Changed from game_id to match endpoint response
 
 class DeepMemoryCreate(BaseModel):
     saved_game_id: int

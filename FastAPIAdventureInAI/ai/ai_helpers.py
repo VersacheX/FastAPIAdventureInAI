@@ -1,4 +1,9 @@
+"""
+AI helper functions for story generation and history management.
+"""
 from ai.ai_client_requests import ai_summarize_chunk, ai_prime_narrator, ai_generate_story
+from ai.ai_settings import get_ai_settings
+
 
 def get_recent_memories(memory_log, limit=None):
     """
@@ -9,6 +14,7 @@ def get_recent_memories(memory_log, limit=None):
         return memory_log
     return memory_log[-limit:]
 
+
 def build_structured_json(context, user_input, settings=None):
     """
     Build structured JSON for AI generation.
@@ -16,7 +22,6 @@ def build_structured_json(context, user_input, settings=None):
     """
     if settings is None:
         # Fallback to loading from ai_settings if not provided
-        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
     
     if not user_input.strip() == '':
@@ -53,7 +58,6 @@ def build_structured_json(context, user_input, settings=None):
     }
     return structured 
 
-############################ LOGIC SETUP TO AI API CALLS ############################
 
 def generate_story(context, user_input=None, include_initial=False, settings=None, username=None):
     """
@@ -61,13 +65,13 @@ def generate_story(context, user_input=None, include_initial=False, settings=Non
     Settings dict should contain AI configuration.
     """
     if settings is None:
-        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
         
     if include_initial:
         ai_prime_narrator(username=username)
         context["history"].append(context['setup'])
         print(context['setup'] + "\n")
+    
     # Use the AI server for story generation
     story = ai_generate_story(
         build_structured_json(context, user_input or "", settings), 
@@ -79,6 +83,7 @@ def generate_story(context, user_input=None, include_initial=False, settings=Non
         context["history"].append(story.strip())
     return story.strip()
 
+
 def tokenize_history(context, settings=None):
     """
     Tokenize history when enough entries have accumulated.
@@ -86,7 +91,6 @@ def tokenize_history(context, settings=None):
                                   TOKENIZE_HISTORY_CHUNK_SIZE, TOKENIZED_HISTORY_BLOCK_SIZE
     """
     if settings is None:
-        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
     
     history = context["history"]
@@ -121,60 +125,15 @@ def tokenize_history(context, settings=None):
     context["tokenized_history"] = tokenized_history
     return False 
 
+
 def summarize_chunk(chunk, max_tokens=None):
     """
     Summarize a chunk of history entries.
     max_tokens should be passed from loaded settings.
     """
     if max_tokens is None:
-        from ai.ai_settings import get_ai_settings
         settings = get_ai_settings()
         max_tokens = settings.get('TOKENIZED_HISTORY_BLOCK_SIZE')
     
     summary = ai_summarize_chunk(chunk, max_tokens)
     return summary
-
-############################# SETUP NEW/LOADED GAME CONTEXT ############################
-
-def setup_load_game(loaded_game, token, user, WORLD_CACHE, RATING_CACHE):
-    world = WORLD_CACHE.get(loaded_game.world_id, {})
-    rating = RATING_CACHE.get(loaded_game.rating_id, {})
-    context = {
-        'player_world': world.get("name", ""),
-        'setup': world.get("preface", ""),
-        'world_tokens': world.get("world_tokens", ""),
-        'game_rating': rating.get("name", ""),
-        'story_splitter': f"# Continue {rating.get('ai_prompt', '')} after the player action.",
-        'history': [h.entry for h in loaded_game.history],
-        'tokenized_history': [th.model_dump() for th in loaded_game.tokenized_history or []],
-        'token_count': 0,
-        'player_name': loaded_game.player_name,
-        'player_gender': loaded_game.player_gender,
-        'game_id': loaded_game.id
-    }
-    user_id = user.id
-    world_id = loaded_game.world_id
-    rating_id = loaded_game.rating_id
-
-    return context, user_id, world_id, rating_id
-
-def setup_new_game(player_world, player_name, player_gender, game_rating, token, user, WORLD_CACHE, RATING_CACHE):
-    gender_value = "Male" if player_gender.lower() == "m" else "Female"
-    world_id = next((wid for wid, w in WORLD_CACHE.items() if w["name"] == player_world["name"]), None)
-    rating_id = list(RATING_CACHE.keys())[game_rating]
-    context = {
-        'player_world': player_world["name"],
-        'setup': player_world["preface"],
-        'world_tokens': player_world["world_tokens"],
-        'game_rating': RATING_CACHE[rating_id]["name"],
-        'story_splitter': f"# Continue {RATING_CACHE[rating_id]['ai_prompt']} after the player action.",
-        'history': [],
-        'tokenized_history': [],
-        'token_count': 0,
-        'player_name': player_name,
-        'player_gender': gender_value,
-        'game_id': 0
-    }
-    user_id = user.id
-
-    return context, user_id, world_id, rating_id

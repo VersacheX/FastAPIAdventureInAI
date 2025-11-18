@@ -110,7 +110,7 @@ async def prime_narrator(username: str = Depends(verify_token)):
     return {"status": "primed"}
 
 def flatten_json_prompt(json_data):
-    """Build optimized prompt from structured game data."""
+    """Build optimized prompt from structured game data with token budget enforcement."""
     recent_story = json_data.get("RecentStory", [])
     tokenized_history = json_data.get("TokenizedHistory", [])
     deep_memory = json_data.get("DeepMemory")  # Ultra-compressed ancient history
@@ -124,42 +124,93 @@ def flatten_json_prompt(json_data):
         f"# Player: {json_data['PlayerInfo']['Name']} ({json_data['PlayerInfo']['Gender']})\n"
         f"# Rating: {json_data['GameSettings']['Rating']}\n\n"
     )
-
-    # Deep memory (ultra-compressed ancient history)
-    if deep_memory:
-        prompt += "# Ancient History (Major Events):\n"
-        prompt += f"{deep_memory.strip()}\n\n"
-
-    # Compressed history (if available) - just use the most recent summaries
-    if tokenized_history:
-        prompt += "# Past Events:\n"
-        # Get last N tokenized blocks
-        recent_blocks = tokenized_history[-MAX_TOKENIZED_HISTORY_BLOCK:]
-        for block in recent_blocks:
-            summary = block.get("summary", "").strip()
-            if summary:
-                prompt += f"{summary}\n\n"
-
-    # Recent chronological story
-    prompt += "# Recent Story:\n"
-    for entry in recent_story:
-        prompt += f"{entry.strip()}\n\n"
-
-    # Current player input
+    
+    # Count tokens in base prompt
+    base_tokens = len(STORY_TOKENIZER.encode(prompt))
+    tokens_used = base_tokens
+    
+    # Reserve tokens for action and continuation
     current_action = json_data['CurrentAction'].strip()
+    action_text = ""
     if current_action:
         action_mode = json_data.get("ActionMode", "ACTION")
         if action_mode == "SPEECH":
-            prompt += f"# Player Says: \"{current_action}\"\n\n"
+            action_text = f"# Player Says: \"{current_action}\"\n\n"
         elif action_mode == "NARRATE":
-            prompt += f"# Player Narrative: {current_action}\n\n"
+            action_text = f"# Player Narrative: {current_action}\n\n"
         else:
-            prompt += f"# Player Action: {current_action}\n\n"
+            action_text = f"# Player Action: {current_action}\n\n"
     else:
-        prompt += "# No Player Action. Continue the story naturally.\n\n"
+        action_text = "# No Player Action. Continue the story naturally.\n\n"
+    
+    action_text += f"{json_data['GameSettings']['StorySplitter']}\n"
+    action_tokens = len(STORY_TOKENIZER.encode(action_text))
+    tokens_used += action_tokens
+    
+    # Calculate available budget for history
+    available_tokens = SAFE_PROMPT_LIMIT - tokens_used
+    
+    # Deep memory (ultra-compressed ancient history)
+    if deep_memory and available_tokens > 0:
+        deep_section = f"# Ancient History (Major Events):\n{deep_memory.strip()}\n\n"
+        deep_tokens = len(STORY_TOKENIZER.encode(deep_section))
+        if deep_tokens <= available_tokens:
+            prompt += deep_section
+            tokens_used += deep_tokens
+            available_tokens -= deep_tokens
 
-    # Simplified continuation instruction
-    prompt += f"{json_data['GameSettings']['StorySplitter']}\n"
+    # Compressed history (if available) - just use the most recent summaries
+    if tokenized_history and available_tokens > 0:
+        history_section = "# Past Events:\n"
+        # Start with most recent and work backwards until we run out of budget
+        recent_blocks = list(reversed(tokenized_history[-MAX_TOKENIZED_HISTORY_BLOCK:]))
+        blocks_to_include = []
+        
+        for block in recent_blocks:
+            summary = block.get("summary", "").strip()
+            if summary:
+                block_text = f"{summary}\n\n"
+                block_tokens = len(STORY_TOKENIZER.encode(block_text))
+                if block_tokens <= available_tokens:
+                    blocks_to_include.insert(0, block_text)  # Insert at beginning to maintain order
+                    available_tokens -= block_tokens
+                else:
+                    break  # Stop if we can't fit more
+        
+        if blocks_to_include:
+            prompt += history_section
+            for block_text in blocks_to_include:
+                prompt += block_text
+            tokens_used = SAFE_PROMPT_LIMIT - available_tokens
+
+    # Recent chronological story - also budget constrained
+    if recent_story and available_tokens > 0:
+        story_section = "# Recent Story:\n"
+        # Start with most recent and work backwards
+        recent_entries = list(reversed(recent_story))
+        entries_to_include = []
+        
+        for entry in recent_entries:
+            entry_text = f"{entry.strip()}\n\n"
+            entry_tokens = len(STORY_TOKENIZER.encode(entry_text))
+            if entry_tokens <= available_tokens:
+                entries_to_include.insert(0, entry_text)  # Insert at beginning to maintain order
+                available_tokens -= entry_tokens
+            else:
+                break  # Stop if we can't fit more
+        
+        if entries_to_include:
+            prompt += story_section
+            for entry_text in entries_to_include:
+                prompt += entry_text
+
+    # Add action section (already calculated above)
+    prompt += action_text
+    
+    # Log final token count for debugging
+    final_tokens = len(STORY_TOKENIZER.encode(prompt))
+    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
+    
     return prompt
 
 @app.post("/generate_story/")
@@ -317,7 +368,7 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
 
-    # Build context-aware prompt
+    # Build context-aware prompt header
     prompt_parts = [
         "Condense this story segment into the most efficient summary possible.\n"
         "Include ONLY:\n"
@@ -346,10 +397,49 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     else:
         prompt_parts.append("\n# Story Segment:\n")
     
-    prompt_parts.append("\n".join(chunk))
-    prompt_parts.append(f"\n\n{SUMMARY_SPLIT_MARKER}\n")
+    # Build the header to count its tokens
+    header = "".join(prompt_parts)
+    footer = f"\n\n{SUMMARY_SPLIT_MARKER}\n"
     
-    prompt = "".join(prompt_parts)
+    header_tokens = len(STORY_TOKENIZER.encode(header))
+    footer_tokens = len(STORY_TOKENIZER.encode(footer))
+    reserved_tokens = max_tokens  # Reserve space for the summary output
+    
+    # Calculate available budget for chunk content
+    available_tokens = SAFE_PROMPT_LIMIT - header_tokens - footer_tokens - reserved_tokens
+    
+    # Add chunk entries until we run out of budget
+    chunk_text_parts = []
+    for entry in chunk:
+        entry_text = entry.strip() + "\n"
+        entry_tokens = len(STORY_TOKENIZER.encode(entry_text))
+        
+        if entry_tokens <= available_tokens:
+            chunk_text_parts.append(entry_text)
+            available_tokens -= entry_tokens
+        else:
+            # If we can't fit the whole entry, truncate it
+            if len(chunk_text_parts) == 0:
+                # At least include a truncated version of the first entry
+                words = entry.split()
+                truncated = ""
+                for word in words:
+                    test_text = truncated + " " + word if truncated else word
+                    test_tokens = len(STORY_TOKENIZER.encode(test_text))
+                    if test_tokens <= available_tokens:
+                        truncated = test_text
+                    else:
+                        break
+                if truncated:
+                    chunk_text_parts.append(truncated + "...\n")
+            break
+    
+    prompt = header + "".join(chunk_text_parts) + footer
+    
+    # Log the token count
+    final_tokens = len(STORY_TOKENIZER.encode(prompt))
+    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
+    print(f"[Summarize Token Budget] Chunk entries included: {len(chunk_text_parts)}/{len(chunk)}")
     
     print("\n" + "="*80)
     print("SUMMARIZE_CHUNK - AI PROMPT:")

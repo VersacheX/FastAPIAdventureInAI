@@ -20,6 +20,13 @@ from ai.schemas_ai_server import (
     GenerateFromGameRequest,
     SummarizeChunkRequest
 )
+from ai.ai_helpers import (
+    get_recent_memories,
+    build_structured_json,
+    generate_story,
+    tokenize_history,
+    summarize_chunk
+)
 
 __all__ = [
     # Settings
@@ -37,5 +44,11 @@ __all__ = [
     # Schemas
     "GenerateStoryRequest",
     "GenerateFromGameRequest",
-    "SummarizeChunkRequest"
+    "SummarizeChunkRequest",
+    # Helpers
+    "get_recent_memories",
+    "build_structured_json",
+    "generate_story",
+    "tokenize_history",
+    "summarize_chunk"
 ]
