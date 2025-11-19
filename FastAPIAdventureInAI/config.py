@@ -10,7 +10,7 @@ load_dotenv()
 # Database Configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "mssql+pyodbc://sljackson:themagicwordmotherfucker@DESKTOP-3K6IPDC/AIAdventureInPython?driver=ODBC+Driver+17+for+SQL+Server"
+    "mssql+pyodbc://username:password@HOSTNAME/DATABASE?driver=ODBC+Driver+17+for+SQL+Server"
 )
 
 # JWT Configuration

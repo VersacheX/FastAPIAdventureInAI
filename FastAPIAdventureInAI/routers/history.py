@@ -174,7 +174,7 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
         if latest_tokenized and latest_tokenized.token_count:
             # Calculate if the latest chunk is less than 90% of target size
             utilization = latest_tokenized.token_count / TOKENIZED_HISTORY_BLOCK_SIZE
-            if utilization < 0.9:
+            if utilization < .75:
                 should_merge = True
                 # We'll use the existing summary as context, not re-summarize the old entries
         
@@ -292,6 +292,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
     ).order_by(TokenizedHistory.end_index.asc()).limit(chunks_to_compress).all()
     
     if not old_chunks:
+        print("No old chunks found for deep memory compression.")
         return
     
     print(f"\n{'='*80}")

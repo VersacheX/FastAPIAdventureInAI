@@ -106,6 +106,13 @@ def summarize_history_chunk(
     Returns:
         Tuple of (summary_text, token_count)
     """
+    print("[summarize_history_chunk] Payload:", {
+        "chunk": history_texts,
+        "max_tokens": max_tokens,
+        "previous_summary": previous_summary,
+        "username": username
+    })
+    
     summary = ai_summarize_chunk(
         history_texts,
         max_tokens,
@@ -144,12 +151,20 @@ def compress_to_deep_memory(
         + "\n\n---\n\n".join(summaries)
     )
     
+    print("[compress_to_deep_memory] Payload:", {
+        "chunk": [prompt],
+        "max_tokens": max_tokens,
+        "previous_summary": None,
+        "username": username
+    })
+
     deep_summary = ai_summarize_chunk(
         [prompt],
         max_tokens=max_tokens,
         previous_summary=None,
         username=username
     )
+
     token_count = calculate_token_count(deep_summary)
     return deep_summary, token_count
 

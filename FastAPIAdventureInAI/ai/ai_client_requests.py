@@ -45,6 +45,13 @@ def ai_summarize_chunk(chunk, max_tokens=TOKENIZED_HISTORY_BLOCK_SIZE, previous_
         "max_tokens": max_tokens,
         "previous_summary": previous_summary
     }
-    resp = requests.post(f"{AI_SERVER_URL}/summarize_chunk/", json=serialize_for_json(payload), headers=headers)
-    resp.raise_for_status()
-    return resp.json()["summary"]
+    print("[ai_summarize_chunk] Sending payload:", payload)
+    try:
+        resp = requests.post(f"{AI_SERVER_URL}/summarize_chunk/", json=serialize_for_json(payload), headers=headers)
+        print("[ai_summarize_chunk] Response status:", resp.status_code)
+        print("[ai_summarize_chunk] Response text:", resp.text)
+        resp.raise_for_status()
+        return resp.json()["summary"]
+    except Exception as e:
+        print("[ai_summarize_chunk] Exception:", e)
+        raise
