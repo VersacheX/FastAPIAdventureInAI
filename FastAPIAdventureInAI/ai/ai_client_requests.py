@@ -2,7 +2,6 @@ import requests
 import jwt
 import os
 from config import SECRET_KEY, ALGORITHM, AI_SERVER_URL
-from aiadventureinpythonconstants import TOKENIZED_HISTORY_BLOCK_SIZE
 from business.converters import serialize_for_json
 
 def _get_ai_auth_headers(username: str = None):
@@ -38,14 +37,14 @@ def ai_count_tokens(text, username: str = None):
     resp.raise_for_status()
     return resp.json()["token_count"]
 
-def ai_summarize_chunk(chunk, max_tokens=TOKENIZED_HISTORY_BLOCK_SIZE, previous_summary=None, username: str = None):
+def ai_summarize_chunk(chunk, max_tokens, previous_summary=None, username: str = None):
     headers = _get_ai_auth_headers(username)
     payload = {
         "chunk": chunk,
         "max_tokens": max_tokens,
         "previous_summary": previous_summary
     }
-    print("[ai_summarize_chunk] Sending payload:", payload)
+    
     try:
         resp = requests.post(f"{AI_SERVER_URL}/summarize_chunk/", json=serialize_for_json(payload), headers=headers)
         print("[ai_summarize_chunk] Response status:", resp.status_code)
@@ -54,4 +53,22 @@ def ai_summarize_chunk(chunk, max_tokens=TOKENIZED_HISTORY_BLOCK_SIZE, previous_
         return resp.json()["summary"]
     except Exception as e:
         print("[ai_summarize_chunk] Exception:", e)
+        raise
+
+def ai_deep_summarize_chunk(chunk, max_tokens, previous_summary=None, username: str = None):
+    headers = _get_ai_auth_headers(username)
+    payload = {
+        "chunk": chunk,
+        "max_tokens": max_tokens,
+        "previous_summary": previous_summary
+    }
+    print("[ai_summarize_chunk] Sending payload:", payload)
+    try:
+        resp = requests.post(f"{AI_SERVER_URL}/deep_summarize_chunk/", json=serialize_for_json(payload), headers=headers)
+        print("[ai_deep_summarize_chunk] Response status:", resp.status_code)
+        print("[ai_deep_summarize_chunk] Response text:", resp.text)
+        resp.raise_for_status()
+        return resp.json()["summary"]
+    except Exception as e:
+        print("[ai_deep_summarize_chunk] Exception:", e)
         raise

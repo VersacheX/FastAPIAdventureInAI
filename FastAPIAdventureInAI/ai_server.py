@@ -17,27 +17,22 @@ from transformers import AutoTokenizer, set_seed
 
 # Load AI settings from database
 from ai.ai_settings import get_ai_settings
+from dependencies import get_db, get_current_user
 
 # Import configuration from environment
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
 from ai.schemas_ai_server import *
 
-# Load settings once at startup
-_AI_SETTINGS = get_ai_settings()
-STORYTELLER_PROMPT = _AI_SETTINGS['STORYTELLER_PROMPT']
-SUMMARY_SPLIT_MARKER = _AI_SETTINGS['SUMMARY_SPLIT_MARKER']
-GAME_DIRECTIVE = _AI_SETTINGS['GAME_DIRECTIVE']
-RECENT_MEMORY_LIMIT = _AI_SETTINGS['RECENT_MEMORY_LIMIT']
-MEMORY_BACKLOG_LIMIT = _AI_SETTINGS['MEMORY_BACKLOG_LIMIT']
-TOKENIZE_HISTORY_CHUNK_SIZE = _AI_SETTINGS['TOKENIZE_HISTORY_CHUNK_SIZE']
-TOKENIZED_HISTORY_BLOCK_SIZE = _AI_SETTINGS['TOKENIZED_HISTORY_BLOCK_SIZE']
-SUMMARY_MIN_TOKEN_PERCENT = _AI_SETTINGS['SUMMARY_MIN_TOKEN_PERCENT']
-MAX_TOKENIZED_HISTORY_BLOCK = _AI_SETTINGS['MAX_TOKENIZED_HISTORY_BLOCK']
-MAX_TOKENS = _AI_SETTINGS['MAX_TOKENS']
-RESERVED_FOR_GENERATION = _AI_SETTINGS['RESERVED_FOR_GENERATION']
-SAFE_PROMPT_LIMIT = _AI_SETTINGS['SAFE_PROMPT_LIMIT']
-STOP_TOKENS = _AI_SETTINGS['STOP_TOKENS']
+
+# Helper to get AI settings for a user
+def get_user_ai_settings(user_id: int):
+    return get_ai_settings(None, None, user_id)
+
+# Example usage in endpoints:
+# settings = get_user_ai_settings(user_id)
+# STORYTELLER_PROMPT = settings['STORYTELLER_PROMPT']
+# ...
 
 AI_MODEL = "TheBloke/MythoMax-L2-13B-GPTQ"
 
@@ -64,6 +59,7 @@ def silent_model_load():
             return model, tokenizer
 
 STORY_GENERATOR, STORY_TOKENIZER = silent_model_load()
+
 
 app = FastAPI()
 
@@ -98,7 +94,9 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         )
 
 @app.post("/prime_narrator/")
-async def prime_narrator(username: str = Depends(verify_token)):
+async def prime_narrator(db=Depends(get_db), user=Depends(get_current_user)):
+    #settings = get_user_ai_settings(user.id)
+    # You can use settings here if needed
     inputs = await run_in_threadpool(lambda: STORY_TOKENIZER("Prime the narrator.", return_tensors="pt").to("cuda"))
     _ = await run_in_threadpool(
         lambda: STORY_GENERATOR.generate(
@@ -109,7 +107,7 @@ async def prime_narrator(username: str = Depends(verify_token)):
     )
     return {"status": "primed"}
 
-def flatten_json_prompt(json_data):
+def flatten_json_prompt(json_data, settings):
     """Build optimized prompt from structured game data with token budget enforcement."""
     recent_story = json_data.get("RecentStory", [])
     tokenized_history = json_data.get("TokenizedHistory", [])
@@ -127,6 +125,7 @@ def flatten_json_prompt(json_data):
     
     # Count tokens in base prompt
     base_tokens = len(STORY_TOKENIZER.encode(prompt))
+    #print(f"[Token Budget] Base prompt: {base_tokens} tokens")
     tokens_used = base_tokens
     
     # Reserve tokens for action and continuation
@@ -145,11 +144,13 @@ def flatten_json_prompt(json_data):
     
     action_text += f"{json_data['GameSettings']['StorySplitter']}\n"
     action_tokens = len(STORY_TOKENIZER.encode(action_text))
+    #print(f"[Token Budget] Action section: {action_tokens} tokens")
     tokens_used += action_tokens
     
     # Calculate available budget for history
-    available_tokens = SAFE_PROMPT_LIMIT - tokens_used
+    available_tokens = settings.get("SAFE_PROMPT_LIMIT", 3900) - tokens_used
     
+    #print(f"[Token Budget] Available tokens: {available_tokens}")
     # Deep memory (ultra-compressed ancient history)
     if deep_memory and available_tokens > 0:
         deep_section = f"# Ancient History (Major Events):\n{deep_memory.strip()}\n\n"
@@ -159,30 +160,36 @@ def flatten_json_prompt(json_data):
             tokens_used += deep_tokens
             available_tokens -= deep_tokens
 
+    total_block_tokens = 0
     # Compressed history (if available) - just use the most recent summaries
     if tokenized_history and available_tokens > 0:
         history_section = "# Past Events:\n"
         # Start with most recent and work backwards until we run out of budget
-        recent_blocks = list(reversed(tokenized_history[-MAX_TOKENIZED_HISTORY_BLOCK:]))
-        blocks_to_include = []
-        
+        recent_blocks = list(reversed(tokenized_history[-settings.get("MAX_TOKENIZED_HISTORY_BLOCK", 4):]))
+        blocks_to_include = []       
+
         for block in recent_blocks:
             summary = block.get("summary", "").strip()
             if summary:
                 block_text = f"{summary}\n\n"
                 block_tokens = len(STORY_TOKENIZER.encode(block_text))
                 if block_tokens <= available_tokens:
+                    total_block_tokens += block_tokens
                     blocks_to_include.insert(0, block_text)  # Insert at beginning to maintain order
                     available_tokens -= block_tokens
                 else:
                     break  # Stop if we can't fit more
         
+        #print(f"[Token Budget] Compressed history tokens:{total_block_tokens}")
         if blocks_to_include:
             prompt += history_section
             for block_text in blocks_to_include:
                 prompt += block_text
-            tokens_used = SAFE_PROMPT_LIMIT - available_tokens
+            tokens_used = settings.get("SAFE_PROMPT_LIMIT", 3900) - available_tokens
 
+    #print(f"[Token Budget] After deep memory and compressed history: {tokens_used} tokens used, {available_tokens} tokens left.")
+    
+    total_entry_tokens = 0
     # Recent chronological story - also budget constrained
     if recent_story and available_tokens > 0:
         story_section = "# Recent Story:\n"
@@ -194,11 +201,12 @@ def flatten_json_prompt(json_data):
             entry_text = f"{entry.strip()}\n\n"
             entry_tokens = len(STORY_TOKENIZER.encode(entry_text))
             if entry_tokens <= available_tokens:
+                total_entry_tokens += entry_tokens
                 entries_to_include.insert(0, entry_text)  # Insert at beginning to maintain order
                 available_tokens -= entry_tokens
             else:
                 break  # Stop if we can't fit more
-        
+        #print(f"[Token Budget] Recent story entries included tokens: {total_entry_tokens}")
         if entries_to_include:
             prompt += story_section
             for entry_text in entries_to_include:
@@ -209,21 +217,26 @@ def flatten_json_prompt(json_data):
     
     # Log final token count for debugging
     final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
-    
+    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3901) })")
+    print(f"[Token Budget] MEMORIES: {total_block_tokens} ACTIONS: {action_tokens} BASE: {base_tokens} RECENT HISTORY: {total_entry_tokens}")
+    # if(final_tokens != total_block_tokens + action_tokens + base_tokens + total_entry_tokens):
+    #     print(f"Token count mismatch detected! {final_tokens} != {total_block_tokens + action_tokens + base_tokens + total_entry_tokens}")
+
     return prompt
 
 @app.post("/generate_story/")
-async def generate_story(request: GenerateStoryRequest, username: str = Depends(verify_token)):
+async def generate_story(request: GenerateStoryRequest, db=Depends(get_db), user=Depends(get_current_user)):
     # Set random seed for reproducibility
     set_seed(random.randint(0, 2**32 - 1))
 
+    settings = get_user_ai_settings(user.id)
+    # Use settings as needed, e.g. for prompt construction
     context = request.context
     user_input = request.user_input or ""
     include_initial = request.include_initial
 
     # Build prompt (GAME_DIRECTIVE removed - redundant)
-    prompt = flatten_json_prompt(context)
+    prompt = flatten_json_prompt(context, settings)
 
     inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
     prompt_token_count = inputs.input_ids.shape[-1]
@@ -234,7 +247,7 @@ async def generate_story(request: GenerateStoryRequest, username: str = Depends(
         output = await run_in_threadpool(
             lambda: STORY_GENERATOR.generate(
                 **inputs,
-                max_new_tokens=RESERVED_FOR_GENERATION,
+                max_new_tokens=settings.get('RESERVED_FOR_GENERATION', 300),
                 num_return_sequences=1,
                 temperature=0.8,
                 top_p=0.9,
@@ -246,7 +259,7 @@ async def generate_story(request: GenerateStoryRequest, username: str = Depends(
         text = STORY_TOKENIZER.decode(generated_tokens, skip_special_tokens=True)
 
         # Remove lines starting with any stop token
-        for stop_token in STOP_TOKENS:
+        for stop_token in settings.get('STOP_TOKENS', []):
             if text.strip().startswith(stop_token):
                 text = text.strip()[len(stop_token):].lstrip()
 
@@ -274,17 +287,18 @@ async def generate_story(request: GenerateStoryRequest, username: str = Depends(
     return {"story": text.strip()}
 
 @app.post("/generate_from_game/")
-async def generate_from_game(request: GenerateFromGameRequest, username: str = Depends(verify_token)):
+async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_current_user)):
     """
     Accepts game data directly and builds structured JSON before generating story.
     This endpoint is designed for React clients to call directly.
     """
+    settings = get_user_ai_settings(user.id)
     # Set random seed for reproducibility
     set_seed(random.randint(0, 2**32 - 1))
     
     # Build structured JSON from game data
     structured_json = {
-        "NarratorDirectives": STORYTELLER_PROMPT,
+        "NarratorDirectives": settings.get("STORYTELLER_PROMPT", "You're a narrator. Use the world and character information to tell an engaging story."),
         "UniverseName": request.world_name,
         "UniverseTokens": request.world_tokens,
         "StoryPreface": request.story_preface,
@@ -297,15 +311,15 @@ async def generate_from_game(request: GenerateFromGameRequest, username: str = D
             "Gender": request.player_gender
         },
         "DeepMemory": request.deep_memory,
-        "TokenizedHistory": request.tokenized_history[-MAX_TOKENIZED_HISTORY_BLOCK:] if request.tokenized_history else [],
-        "RecentStory": request.history[-RECENT_MEMORY_LIMIT:] if request.history else [],
+        "TokenizedHistory": request.tokenized_history[-settings.get("MAX_TOKENIZED_HISTORY_BLOCK", 4):] if request.tokenized_history else [],
+        "RecentStory": request.history[-settings.get("RECENT_MEMORY_LIMIT", 600):] if request.history else [],
         "FullHistory": request.history,
         "CurrentAction": request.user_input,
         "ActionMode": request.action_mode
     }
     
     # Generate story using the structured JSON (GAME_DIRECTIVE removed - redundant)
-    prompt = flatten_json_prompt(structured_json)
+    prompt = flatten_json_prompt(structured_json, settings)
     
     # Print the full prompt to console
     # print("\n" + "="*80)
@@ -323,7 +337,7 @@ async def generate_from_game(request: GenerateFromGameRequest, username: str = D
         output = await run_in_threadpool(
             lambda: STORY_GENERATOR.generate(
                 **inputs,
-                max_new_tokens=RESERVED_FOR_GENERATION,
+                max_new_tokens=settings.get("RESERVED_FOR_GENERATION", 150),
                 num_return_sequences=1,
                 temperature=0.8,
                 top_p=0.9,
@@ -335,7 +349,7 @@ async def generate_from_game(request: GenerateFromGameRequest, username: str = D
         text = STORY_TOKENIZER.decode(generated_tokens, skip_special_tokens=True)
 
         # Remove lines starting with any stop token
-        for stop_token in STOP_TOKENS:
+        for stop_token in settings.get("STOP_TOKENS", ""):
             if text.strip().startswith(stop_token):
                 text = text.strip()[len(stop_token):].lstrip()
 
@@ -363,10 +377,12 @@ async def generate_from_game(request: GenerateFromGameRequest, username: str = D
     return {"story": text.strip()}
 
 @app.post("/summarize_chunk/")
-async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depends(verify_token)):
+async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_current_user)):
     chunk = request.chunk
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
+    
+    settings = get_user_ai_settings(user.id)
 
     # Build context-aware prompt header
     prompt_parts = [
@@ -399,14 +415,14 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     
     # Build the header to count its tokens
     header = "".join(prompt_parts)
-    footer = f"\n\n{SUMMARY_SPLIT_MARKER}\n"
+    footer = f"\n\n{settings.get('SUMMARY_SPLIT_MARKER', '<<<SPLIT_MARKER>>>')}\n"
     
     header_tokens = len(STORY_TOKENIZER.encode(header))
     footer_tokens = len(STORY_TOKENIZER.encode(footer))
     reserved_tokens = max_tokens  # Reserve space for the summary output
     
     # Calculate available budget for chunk content
-    available_tokens = SAFE_PROMPT_LIMIT - header_tokens - footer_tokens - reserved_tokens
+    available_tokens = settings.get("SAFE_PROMPT_LIMIT", 3900) - header_tokens - footer_tokens - reserved_tokens
     
     # Add chunk entries until we run out of budget
     chunk_text_parts = []
@@ -438,14 +454,56 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     
     # Log the token count
     final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
-    print(f"[Summarize Token Budget] Chunk entries included: {len(chunk_text_parts)}/{len(chunk)}")
+    # print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3900)})")
+    # print(f"[Summarize Token Budget] Chunk entries included: {len(chunk_text_parts)}/{len(chunk)}")
+    
+    # print("\n" + "="*80)
+    # print("SUMMARIZE_CHUNK - AI PROMPT:")
+    # print("="*80)
+    # print(prompt)
+    # print("="*80 + "\n")
+    
+    # Single attempt - accept whatever concise summary the AI produces
+    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
+    summary_output = await run_in_threadpool(
+        lambda: STORY_GENERATOR.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            num_return_sequences=1,
+            temperature=0.6,
+            top_p=0.75,
+            repetition_penalty=1.1
+        )
+    )
+    summary_text = STORY_TOKENIZER.decode(summary_output[0], skip_special_tokens=True)
+
+    # Strip everything before the marker
+    if settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>") in summary_text:
+        summary_text = summary_text.split(settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>"))[-1]
+
+    summary_text = summary_text.strip()
     
     print("\n" + "="*80)
-    print("SUMMARIZE_CHUNK - AI PROMPT:")
+    print("SUMMARIZE_CHUNK - AI RESPONSE (after split marker removal):")
     print("="*80)
-    print(prompt)
+    print(summary_text)
+    print(f"Token count: {len(STORY_TOKENIZER.encode(summary_text, add_special_tokens=False))}")
     print("="*80 + "\n")
+
+    return {"summary": summary_text}
+
+@app.post("/deep_summarize_chunk/")
+async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(get_current_user)):
+    prompt = request.chunk
+    max_tokens = request.max_tokens
+    #previous_summary = request.previous_summary
+
+    settings = get_user_ai_settings(user.id)
+    SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
+    SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
+    # Log the token count
+    final_tokens = len(STORY_TOKENIZER.encode(prompt))
+    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
     
     # Single attempt - accept whatever concise summary the AI produces
     inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
@@ -475,8 +533,6 @@ async def summarize_chunk(request: SummarizeChunkRequest, username: str = Depend
     print("="*80 + "\n")
 
     return {"summary": summary_text}
-
-
 
 @app.post("/count_tokens/")
 async def count_tokens(request: Request, username: str = Depends(verify_token)):

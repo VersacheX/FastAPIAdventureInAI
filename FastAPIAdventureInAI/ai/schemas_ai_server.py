@@ -25,3 +25,8 @@ class SummarizeChunkRequest(BaseModel):
     chunk: List[str]
     max_tokens: int
     previous_summary: Optional[str] = None
+
+class DeepSummarizeChunkRequest(BaseModel):
+    chunk: str
+    max_tokens: int
+    previous_summary: Optional[str] = None

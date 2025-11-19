@@ -160,6 +160,7 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
     # Calculate total tokens in untokenized entries
     total_untokenized_tokens = sum(h.token_count or 0 for h in untokenized)
     
+    print(f"{total_untokenized_tokens} of {TOKENIZE_THRESHOLD}")
     # Check if we should create a new tokenized chunk (when untokenized exceeds TOKENIZE_THRESHOLD)
     if total_untokenized_tokens >= TOKENIZE_THRESHOLD:
         # Get the most recent tokenized chunk for this game
@@ -279,6 +280,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         TokenizedHistory.is_tokenized == 0
     ).count()
     
+    print(f"{chunk_count} of {MAX_TOKENIZED_HISTORY_BLOCK} tokenized chunks for saved_game_id {saved_game_id}")
     if chunk_count <= MAX_TOKENIZED_HISTORY_BLOCK:
         return  # No compression needed
     
@@ -317,9 +319,12 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         summaries_to_merge.append(chunk.summary)
     
     # Ultra-compress into deep memory
+    print(f"DEEP_MEMORY_MAX_TOKENS value: {DEEP_MEMORY_MAX_TOKENS}")
+    if DEEP_MEMORY_MAX_TOKENS is None:
+        raise Exception("DEEP_MEMORY_MAX_TOKENS is None. Cannot compress to deep memory without a valid token limit.")
     deep_summary, deep_token_count = compress_to_deep_memory(
         summaries_to_merge,
-        DEEP_MEMORY_MAX_TOKENS,
+        int(DEEP_MEMORY_MAX_TOKENS),
         username=username
     )
     

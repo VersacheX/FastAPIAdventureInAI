@@ -81,6 +81,7 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
             'MAX_TOKENIZED_HISTORY_BLOCK': settings.max_tokenized_history_block,
             'TOKENIZED_HISTORY_BLOCK_SIZE': settings.tokenized_history_block_size,
             'SUMMARY_MIN_TOKEN_PERCENT': settings.summary_min_token_percent,
+            'DEEP_MEMORY_MAX_TOKENS': settings.deep_memory_max_tokens,
             'MAX_TOKENS': settings.max_tokens,
             'RESERVED_FOR_GENERATION': settings.reserved_for_generation,
             'SAFE_PROMPT_LIMIT': settings.safe_prompt_limit,

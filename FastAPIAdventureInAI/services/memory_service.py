@@ -8,7 +8,7 @@ import requests
 import jwt
 
 from business.models import StoryHistory, TokenizedHistory, DeepMemory, SavedGame
-from ai.ai_client_requests import ai_count_tokens, ai_summarize_chunk
+from ai.ai_client_requests import ai_count_tokens, ai_summarize_chunk, ai_deep_summarize_chunk
 from ai.ai_settings import get_setting
 from config import SECRET_KEY, ALGORITHM, AI_SERVER_URL
 
@@ -106,12 +106,12 @@ def summarize_history_chunk(
     Returns:
         Tuple of (summary_text, token_count)
     """
-    print("[summarize_history_chunk] Payload:", {
-        "chunk": history_texts,
-        "max_tokens": max_tokens,
-        "previous_summary": previous_summary,
-        "username": username
-    })
+    # print("[summarize_history_chunk] Payload:", {
+    #     "chunk": history_texts,
+    #     "max_tokens": max_tokens,
+    #     "previous_summary": previous_summary,
+    #     "username": username
+    # })
     
     summary = ai_summarize_chunk(
         history_texts,
@@ -158,8 +158,8 @@ def compress_to_deep_memory(
         "username": username
     })
 
-    deep_summary = ai_summarize_chunk(
-        [prompt],
+    deep_summary = ai_deep_summarize_chunk(
+        prompt,
         max_tokens=max_tokens,
         previous_summary=None,
         username=username
