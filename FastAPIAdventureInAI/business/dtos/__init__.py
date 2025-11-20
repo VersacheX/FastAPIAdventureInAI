@@ -8,7 +8,9 @@ from .dtos import (
     SavedGameDTO,
     HistoryDTO,
     TokenizedHistoryDTO,
-    DeepMemoryDTO
+    DeepMemoryDTO,
+    AccountLevelDTO,
+    AIDirectiveSettingsDTO
 )
 
 __all__ = [
@@ -18,5 +20,7 @@ __all__ = [
     "SavedGameDTO",
     "HistoryDTO",
     "TokenizedHistoryDTO",
-    "DeepMemoryDTO"
+    "DeepMemoryDTO",
+    "AccountLevelDTO",
+    "AIDirectiveSettingsDTO"
 ]

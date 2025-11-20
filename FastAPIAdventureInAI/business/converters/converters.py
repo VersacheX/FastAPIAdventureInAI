@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
-from business.models import User, World, GameRating, SavedGame, StoryHistory, TokenizedHistory
-from business.dtos import UserDTO, WorldDTO, GameRatingDTO, SavedGameDTO, HistoryDTO, TokenizedHistoryDTO
+from business.models import User, World, GameRating, SavedGame, StoryHistory, TokenizedHistory, AccountLevel, AIDirectiveSettings
+from business.dtos import UserDTO, WorldDTO, GameRatingDTO, SavedGameDTO, HistoryDTO, TokenizedHistoryDTO, AccountLevelDTO, AIDirectiveSettingsDTO
+
+def account_level_to_dto(account_level: AccountLevel) -> AccountLevelDTO:
+    # Let Pydantic map all fields from the SQLAlchemy model via from_attributes
+    return AccountLevelDTO.model_validate(account_level)
 
 def user_to_dto(user: User) -> UserDTO:
     return UserDTO.model_validate(user)
@@ -79,9 +83,13 @@ def saved_game_to_dto(game: SavedGame, history_list, tokenized_history_list, db=
 
     # Get game settings
     # Use default values since settings are game-specific and we don't have all context here
-    max_tokenized_history_block = 6
-    tokenize_threshold = 800
-    tokenized_history_block_size = 200
+    # Need AIDirectiveSettings found from User.account_level_id to AccountLevel.game_settings_id
+    user = db.query(User).filter(User.id == game.user_id).first()
+    account_level = db.query(AccountLevel).filter(AccountLevel.id == user.account_level_id).first() if user else None
+    ai_settings = db.query(AIDirectiveSettings).filter(AIDirectiveSettings.id == account_level.game_settings_id).first() if account_level else None
+    max_tokenized_history_block = ai_settings.max_tokenized_history_block if ai_settings and ai_settings.max_tokenized_history_block is not None else 4
+    tokenize_threshold = ai_settings.tokenize_threshold if ai_settings and ai_settings.tokenize_threshold is not None else 800
+    tokenized_history_block_size = ai_settings.tokenized_history_block_size if ai_settings and ai_settings.tokenized_history_block_size is not None else 200
     
     return SavedGameDTO(
         id=game.id,

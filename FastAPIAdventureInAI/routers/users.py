@@ -8,12 +8,22 @@ from sqlalchemy.orm import Session
 
 from dependencies import get_db, get_current_user, get_user_by_username
 from business.schemas import UserCreate
-from business.dtos import UserDTO, WorldDTO, SavedGameDTO
+from business.dtos import UserDTO, WorldDTO, SavedGameDTO, AccountLevelDTO
 from business.models import User, World, SavedGame, StoryHistory, GameRating
-from business.converters import user_to_dto, world_to_dto
+from business.converters import user_to_dto, world_to_dto, account_level_to_dto
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+# Protected endpoint to get current user's AccountLevel and AIDirectiveSettings
+@router.get("/account_level/me", response_model=AccountLevelDTO)
+async def get_account_level_me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    account_level = current_user.account_level
+    if not account_level:
+        raise HTTPException(status_code=404, detail="Account level not found")
+    return account_level_to_dto(account_level)
 
 @router.post("/", response_model=UserDTO)
 async def create_user(user: UserCreate, db: Session = Depends(get_db)):

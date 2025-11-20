@@ -2,17 +2,17 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_URL, AI_URL } from './config';
 
-function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null }) {
+function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null}) {
   const [name, setName] = useState('');
   const [preface, setPreface] = useState('');
   const [worldTokens, setWorldTokens] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [creating, setCreating] = useState(false);
   const [tokenCount, setTokenCount] = useState(0);
-  const [maxTokens] = useState(1000);
-  
+  const [maxTokens, setMaxTokens] = useState(1000);
+  // maxTokens is now a prop
   const isEditMode = !!worldToEdit;
-
+ 
   // Populate form when editing
   useEffect(() => {
     if (worldToEdit) {
@@ -21,6 +21,24 @@ function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null }) {
       setWorldTokens(worldToEdit.world_tokens || '');
     }
   }, [worldToEdit]);
+
+  // Fetch account level settings to determine dynamic max world tokens
+  useEffect(() => {
+    if (!token) return;
+    axios.get(`${API_URL}/users/account_level/me`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    .then(res => {
+      const dynamicMax = res.data?.game_settings?.max_world_tokens;
+      if (typeof dynamicMax === 'number' && dynamicMax > 0) {
+        setMaxTokens(dynamicMax);
+      }
+    })
+    .catch(err => {
+      // eslint-disable-next-line
+      console.warn('Could not load account level settings, retaining default maxTokens. Reason:', err.response?.data?.detail || err.message);
+    });
+  }, [token]);
 
   // Calculate token count whenever fields change (with debouncing)
   useEffect(() => {

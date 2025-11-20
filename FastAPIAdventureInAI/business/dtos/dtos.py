@@ -2,6 +2,34 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+class AIDirectiveSettingsDTO(BaseModel):
+    id: int
+    storyteller_prompt: str
+    game_directive: str
+    summary_split_marker: str
+    stop_tokens: str  # Comma-separated tokens as stored in DB
+    recent_memory_limit: int
+    memory_backlog_limit: int
+    tokenize_history_chunk_size: int
+    tokenize_threshold: int
+    max_tokenized_history_block: int
+    tokenized_history_block_size: int
+    deep_memory_max_tokens: int
+    summary_min_token_percent: float
+    max_tokens: int
+    reserved_for_generation: int
+    safe_prompt_limit: int
+    max_world_tokens: int
+    class Config:
+        from_attributes = True
+
+class AccountLevelDTO(BaseModel):
+    id: int
+    name: str
+    game_settings: AIDirectiveSettingsDTO
+    class Config:
+        from_attributes = True
+
 class UserDTO(BaseModel):
     id: int
     username: str

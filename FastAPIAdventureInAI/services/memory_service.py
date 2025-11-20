@@ -138,7 +138,7 @@ def compress_to_deep_memory(
         
     Returns:
         Tuple of (deep_summary, token_count)
-    """
+    """    
     prompt = (
         "Compress these story summaries into a single ultra-concise deep memory.\n"
         "Extract ONLY the most critical information:\n"

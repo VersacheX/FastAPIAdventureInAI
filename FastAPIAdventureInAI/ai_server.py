@@ -407,9 +407,9 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
     
     # Add previous summary context if available
     if previous_summary:
-        prompt_parts.append("\n# Previous Summary (DO NOT repeat this):\n")
+        prompt_parts.append("\n# Previous Summary (DO NOT REPEAT this):\n")
         prompt_parts.append(previous_summary)
-        prompt_parts.append("\n\n# New Events to Summarize (focus ONLY on what's new):\n")
+        prompt_parts.append("\n\n# Recent history to Summarize (focus ONLY on what's new):\n")
     else:
         prompt_parts.append("\n# Story Segment:\n")
     
@@ -501,6 +501,8 @@ async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(
     settings = get_user_ai_settings(user.id)
     SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
     SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
+
+    prompt+=f"\n{SUMMARY_SPLIT_MARKER}"
     # Log the token count
     final_tokens = len(STORY_TOKENIZER.encode(prompt))
     print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
