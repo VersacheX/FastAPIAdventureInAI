@@ -118,7 +118,7 @@ def flatten_json_prompt(json_data, settings):
         f"# Narrator Directives:\n{json_data['NarratorDirectives']}\n\n"
         f"# Universe: {json_data['UniverseName']}\n"
         f"{json_data['UniverseTokens']}\n\n"
-        f"# Story Preface:\n{json_data['StoryPreface']}\n\n"
+        #f"# Story Preface:\n{json_data['StoryPreface']}\n\n"
         f"# Player: {json_data['PlayerInfo']['Name']} ({json_data['PlayerInfo']['Gender']})\n"
         f"# Rating: {json_data['GameSettings']['Rating']}\n\n"
     )
@@ -406,12 +406,12 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
     ]
     
     # Add previous summary context if available
-    if previous_summary:
-        prompt_parts.append("\n# Previous Summary (DO NOT REPEAT this):\n")
-        prompt_parts.append(previous_summary)
-        prompt_parts.append("\n\n# Recent history to Summarize (focus ONLY on what's new):\n")
-    else:
-        prompt_parts.append("\n# Story Segment:\n")
+    # if previous_summary:
+    #     prompt_parts.append("\n# Previous Summary (DO NOT REPEAT this):\n")
+    #     prompt_parts.append(previous_summary)
+    #     prompt_parts.append("\n\n# Recent history to Summarize (focus ONLY on what's new):\n")
+    # else:
+    prompt_parts.append("\n# Story Segment:\n")
     
     # Build the header to count its tokens
     header = "".join(prompt_parts)
