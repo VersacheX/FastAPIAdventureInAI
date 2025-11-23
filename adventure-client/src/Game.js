@@ -22,7 +22,6 @@ function Game({ game, token, onExit, onLogout }) {
   const [localDeepHistory, setLocalDeepHistory] = useState(game.deep_history || []);
   const [editingDeepMemoryIndex, setEditingDeepMemoryIndex] = useState(null);
   const [editedDeepMemory, setEditedDeepMemory] = useState('');
-  const [tokenizedHistory, setTokenizedHistory] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -112,7 +111,6 @@ function Game({ game, token, onExit, onLogout }) {
         }
       );
       setLocalTokenized(response.data);
-      setTokenizedHistory(response.data); // Also update tokenizedHistory state
     } catch (err) {
       console.error('Failed to fetch tokenized history:', err);
     }

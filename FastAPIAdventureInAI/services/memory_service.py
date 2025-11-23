@@ -147,6 +147,7 @@ def compress_to_deep_memory(
         "  - World-changing events or discoveries\n"
         "  - Ongoing missions or tasks\n"
         "Remove ALL minor details, scene descriptions, and redundant information.\n"
+        "Retain chronological order.\n"
         "# Summaries to Compress:\n\n"
         + "\n\n---\n\n".join(summaries)
     )

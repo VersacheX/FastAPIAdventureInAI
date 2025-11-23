@@ -43,7 +43,7 @@ async def create_world(
         raise HTTPException(status_code=400, detail="World name already exists")
     
     # Validate token count
-    combined_text = f"{world_data['name']} {world_data['preface']} {world_data['world_tokens']}"
+    combined_text = f"{world_data['name']} {world_data['world_tokens']}" # remove preface {world_data['preface']}
     token_count = count_tokens_batch([combined_text])[0]
     max_world_tokens = get_setting('MAX_WORLD_TOKENS', db)
     if max_world_tokens is None:
@@ -96,7 +96,7 @@ async def update_world(
     updated_name = world_data.get("name", world.name)
     updated_preface = world_data.get("preface", world.preface)
     updated_world_tokens = world_data.get("world_tokens", world.world_tokens)
-    combined_text = f"{updated_name} {updated_preface} {updated_world_tokens}"
+    combined_text = f"{updated_name} {updated_world_tokens}" #{updated_preface}
     token_count = count_tokens_batch([combined_text])[0]
     max_world_tokens = get_setting('MAX_WORLD_TOKENS', db)
     if max_world_tokens is None:

@@ -30,3 +30,7 @@ class DeepSummarizeChunkRequest(BaseModel):
     chunk: str
     max_tokens: int
     previous_summary: Optional[str] = None
+
+class LoreRetrieveRequest(BaseModel):
+    lookup_prompt: str
+    story_preface: Optional[str] = None

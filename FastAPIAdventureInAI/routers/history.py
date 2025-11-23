@@ -163,108 +163,129 @@ def check_and_tokenize_history(saved_game_id: int, db: Session, username: str = 
     print(f"{total_untokenized_tokens} of {TOKENIZE_THRESHOLD}")
     # Check if we should create a new tokenized chunk (when untokenized exceeds TOKENIZE_THRESHOLD)
     if total_untokenized_tokens >= TOKENIZE_THRESHOLD:
-        # Get the most recent tokenized chunk for this game
-        latest_tokenized = db.query(TokenizedHistory).filter(
-            TokenizedHistory.saved_game_id == saved_game_id
-        ).order_by(TokenizedHistory.end_index.desc()).first()
-        
-        # Check if we should merge with the latest chunk (if it's less than 90% full)
-        should_merge = False
-        chunk_entries = untokenized  # Always start with just the new untokenized entries
-        
-        if latest_tokenized and latest_tokenized.token_count:
-            # Calculate if the latest chunk is less than 90% of target size
-            utilization = latest_tokenized.token_count / TOKENIZED_HISTORY_BLOCK_SIZE
-            if utilization < .75:
-                should_merge = True
-                # We'll use the existing summary as context, not re-summarize the old entries
-        
-        # Summarize the NEW entries only
-        # Get previous chunk summary for context
-        previous_summary = None
-        if should_merge and latest_tokenized:
-            # Use the existing chunk's summary as context for the new summary
-            previous_summary = latest_tokenized.summary
-        elif latest_tokenized:
-            # When creating new chunk, use the latest existing chunk as context
-            previous_summary = latest_tokenized.summary
-        
-        chunk_text = [e.text for e in chunk_entries]
-        new_summary, new_summary_token_count = summarize_history_chunk(
-            chunk_text,
-            TOKENIZED_HISTORY_BLOCK_SIZE,
-            previous_summary=previous_summary,
-            username=username
+        # ASYNC MEMORY QUEUE SERVICE - FROM HERE WE WOULD CONVERT TO COMMMITTING TO A QUEUE FOR ASYNC PROCESSING
+        should_merge, latest_tokenized, chunk_entries, new_summary, new_summary_token_count, utilization = send_tokenize_history_compression_request(
+            saved_game_id, db, username=username, untokenized=untokenized
         )
         
-        # Create history references string
-        if should_merge and latest_tokenized:
-            # When merging, combine old summary with new summary
-            if latest_tokenized.summary:
-                # Append new summary to old summary
-                combined_summary = f"{latest_tokenized.summary}\n{new_summary}"
-                combined_token_count = latest_tokenized.token_count + new_summary_token_count
-            else:
-                combined_summary = new_summary
-                combined_token_count = new_summary_token_count
-            
-            # Check if combined summary exceeds the block size limit
-            if combined_token_count > TOKENIZED_HISTORY_BLOCK_SIZE:
-                # Combined summary is too large - create a new chunk instead
-                should_merge = False
-                print(f"Combined summary would be {combined_token_count} tokens (limit: {TOKENIZED_HISTORY_BLOCK_SIZE}), creating new chunk instead")
-                summary = new_summary
-                summary_token_count = new_summary_token_count
-                history_references = ','.join([str(e.id) for e in chunk_entries])
-            else:
-                # Combined summary fits - use it for the merge
-                summary = combined_summary
-                summary_token_count = combined_token_count
-                
-                # Include both old and new entry IDs
-                if latest_tokenized.history_references:
-                    old_ids = latest_tokenized.history_references.split(',')
-                    new_ids = [str(e.id) for e in chunk_entries]
-                    all_ids = old_ids + new_ids
-                    history_references = ','.join(all_ids)
-                else:
-                    history_references = ','.join([str(e.id) for e in chunk_entries])
+        # ASYNC MEMORY QUEUE SERVICE - When we get a successful response from that we call our saving logic        
+        save_tokenized_history_compression_response(should_merge, latest_tokenized, chunk_entries, new_summary, new_summary_token_count, utilization, saved_game_id, db, username)
+
+def save_tokenized_history_compression_response(should_merge, latest_tokenized, chunk_entries, new_summary, new_summary_token_count, utilization, saved_game_id: int, db: Session, username: str = None):
+    TOKENIZED_HISTORY_BLOCK_SIZE = get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)  # 200 tokens per chunk
+    # Create history references string
+    if should_merge and latest_tokenized:
+        # When merging, combine old summary with new summary
+        if latest_tokenized.summary:
+            # Append new summary to old summary
+            combined_summary = f"{latest_tokenized.summary}\n{new_summary}"
+            combined_token_count = latest_tokenized.token_count + new_summary_token_count
         else:
-            # Not merging - use new summary as-is
+            combined_summary = new_summary
+            combined_token_count = new_summary_token_count
+        
+        # Check if combined summary exceeds the block size limit
+        if combined_token_count > TOKENIZED_HISTORY_BLOCK_SIZE:
+            # Combined summary is too large - create a new chunk instead
+            should_merge = False
+            print(f"Combined summary would be {combined_token_count} tokens (limit: {TOKENIZED_HISTORY_BLOCK_SIZE}), creating new chunk instead")
             summary = new_summary
             summary_token_count = new_summary_token_count
             history_references = ','.join([str(e.id) for e in chunk_entries])
-        
-        if should_merge and latest_tokenized:
-            # Update existing chunk with merged content
-            latest_tokenized.summary = summary
-            latest_tokenized.token_count = summary_token_count
-            latest_tokenized.end_index = chunk_entries[-1].entry_index
-            latest_tokenized.history_references = history_references
-            print(f"Updated tokenized chunk (was {utilization*100:.1f}% full, merged with {len(untokenized)} new entries)")
         else:
-            # Create new tokenized chunk
-            new_tokenized = TokenizedHistory(
-                saved_game_id=saved_game_id,
-                start_index=chunk_entries[0].entry_index,
-                end_index=chunk_entries[-1].entry_index,
-                summary=summary,
-                token_count=summary_token_count,
-                history_references=history_references,
-                created_at=datetime.now(timezone.utc)
-            )
-            db.add(new_tokenized)
-            print(f"Created new tokenized chunk with {len(chunk_entries)} entries ({summary_token_count} tokens)")
-        
-        # Mark all chunk entries as tokenized
-        for entry in chunk_entries:
-            entry.is_tokenized = 1
-        
-        db.commit()
-        
-        # Check if we need to compress into deep memory
-        compress_old_chunks_to_deep_memory(saved_game_id, db, username)
+            # Combined summary fits - use it for the merge
+            summary = combined_summary
+            summary_token_count = combined_token_count
+            
+            # Include both old and new entry IDs
+            if latest_tokenized.history_references:
+                old_ids = latest_tokenized.history_references.split(',')
+                new_ids = [str(e.id) for e in chunk_entries]
+                all_ids = old_ids + new_ids
+                history_references = ','.join(all_ids)
+            else:
+                history_references = ','.join([str(e.id) for e in chunk_entries])
+    else:
+        # Not merging - use new summary as-is
+        summary = new_summary
+        summary_token_count = new_summary_token_count
+        history_references = ','.join([str(e.id) for e in chunk_entries])
+    
+    if should_merge and latest_tokenized:
+        # Update existing chunk with merged content
+        latest_tokenized.summary = summary
+        latest_tokenized.token_count = summary_token_count
+        latest_tokenized.end_index = chunk_entries[-1].entry_index
+        latest_tokenized.history_references = history_references
+        print(f"Updated tokenized chunk (was {utilization*100:.1f}% full, merged new entries)")
+    else:
+        # Create new tokenized chunk
+        new_tokenized = TokenizedHistory(
+            saved_game_id=saved_game_id,
+            start_index=chunk_entries[0].entry_index,
+            end_index=chunk_entries[-1].entry_index,
+            summary=summary,
+            token_count=summary_token_count,
+            history_references=history_references,
+            created_at=datetime.now(timezone.utc)
+        )
 
+        db.add(new_tokenized)
+        print(f"Created new tokenized chunk with {len(chunk_entries)} entries ({summary_token_count} tokens)")
+    
+    # Mark all chunk entries as tokenized
+    for entry in chunk_entries:
+        entry.is_tokenized = 1
+
+    db.commit()
+    
+    # Check if we need to compress into deep memory
+    compress_old_chunks_to_deep_memory(saved_game_id, db, username)
+
+def send_tokenize_history_compression_request(saved_game_id: int, db: Session, username: str = None, untokenized = None):
+    TOKENIZED_HISTORY_BLOCK_SIZE = get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)  # 200 tokens per chunk
+
+    # Get the most recent tokenized chunk for this game
+    latest_tokenized = db.query(TokenizedHistory).filter(
+        TokenizedHistory.saved_game_id == saved_game_id
+    ).order_by(TokenizedHistory.end_index.desc()).first()
+    
+    if untokenized is None:
+        # Get untokenized entries
+        untokenized = db.query(StoryHistory).filter(
+            StoryHistory.saved_game_id == saved_game_id and StoryHistory.is_tokenized == 0
+        ).order_by(StoryHistory.entry_index).all()
+
+    # Check if we should merge with the latest chunk (if it's less than 90% full)
+    should_merge = False
+    chunk_entries = untokenized  # Always start with just the new untokenized entries
+    
+    utilization = 0
+    if latest_tokenized and latest_tokenized.token_count:
+        # Calculate if the latest chunk is less than 90% of target size
+        utilization = latest_tokenized.token_count / TOKENIZED_HISTORY_BLOCK_SIZE
+        if utilization < .75:
+            should_merge = True
+            # We'll use the existing summary as context, not re-summarize the old entries
+    
+    # Summarize the NEW entries only
+    # Get previous chunk summary for context
+    previous_summary = None
+    if should_merge and latest_tokenized:
+        # Use the existing chunk's summary as context for the new summary
+        previous_summary = latest_tokenized.summary
+    elif latest_tokenized:
+        # When creating new chunk, use the latest existing chunk as context
+        previous_summary = latest_tokenized.summary
+    
+    chunk_text = [e.text for e in chunk_entries]
+    new_summary, new_summary_token_count = summarize_history_chunk(
+        chunk_text,
+        TOKENIZED_HISTORY_BLOCK_SIZE,
+        previous_summary=previous_summary,
+        username=username
+    )
+    return should_merge, latest_tokenized, chunk_entries, new_summary, new_summary_token_count, utilization
 
 def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username: str = None):
     """
@@ -272,7 +293,8 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
     This keeps the tokenized history manageable while preserving ancient story context.
     """
     MAX_TOKENIZED_HISTORY_BLOCK = get_setting('MAX_TOKENIZED_HISTORY_BLOCK', db)
-    DEEP_MEMORY_MAX_TOKENS = get_setting('DEEP_MEMORY_MAX_TOKENS', db)
+    TOKENIZE_THRESHOLD = get_setting('TOKENIZE_THRESHOLD', db)
+    TOKENIZED_HISTORY_BLOCK_SIZE =  get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)
     
     # Count current ACTIVE tokenized chunks (not yet compressed into deep memory)
     chunk_count = db.query(TokenizedHistory).filter(
@@ -285,7 +307,7 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         return  # No compression needed
     
     # How many chunks to merge into deep memory
-    chunks_to_compress = chunk_count - MAX_TOKENIZED_HISTORY_BLOCK + 2  # Compress extras + 2 more
+    chunks_to_compress = chunk_count# - MAX_TOKENIZED_HISTORY_BLOCK + 2  # Compress extras + 2 more
     
     # Get oldest ACTIVE chunks to compress
     old_chunks = db.query(TokenizedHistory).filter(
@@ -305,29 +327,25 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
     print(f"Compressing {chunks_to_compress} oldest chunks into deep memory...")
     print(f"{'='*80}\n")
     
-    # Get or create deep memory for this game
-    deep_memory = db.query(DeepMemory).filter(
-        DeepMemory.saved_game_id == saved_game_id
-    ).first()
+    # ASYNC MEMORY QUEUE SERVICE - BY HERE WE KNOW THAT WE NEED TO COMPRESS TO DEEP MEMORY  AT THIS POINT WE WOULD CALL THE ASYNC QUEUE SERVICE this would be call to have the below code segment called by the queue
+    deep_summary, deep_token_count, deep_memory = send_deep_memory_compression_request(saved_game_id, db, old_chunks, username=username)
+
+    # ASYNC MEMORY QUEUE SERVICE - BY HERE WHERE KNOW THAT THE QUEUE HAS SUCCEEDED AND WE NEED TO SAVE this section calls after the queue confirms success
+    save_deep_memmory_compression_response(deep_memory, old_chunks, deep_summary, deep_token_count, saved_game_id, db, username=username)
     
-    # Combine old chunks with existing deep memory
-    summaries_to_merge = []
-    if deep_memory:
-        summaries_to_merge.append(deep_memory.summary)
+    # BULLSHIT INFORMATION LOGGING
+    # Calculate and display total token budget
+    remaining_chunks = chunk_count - chunks_to_compress
+    total_memory_tokens = deep_token_count + (remaining_chunks * TOKENIZED_HISTORY_BLOCK_SIZE) + TOKENIZE_THRESHOLD
     
-    for chunk in old_chunks:
-        summaries_to_merge.append(chunk.summary)
-    
-    # Ultra-compress into deep memory
-    print(f"DEEP_MEMORY_MAX_TOKENS value: {DEEP_MEMORY_MAX_TOKENS}")
-    if DEEP_MEMORY_MAX_TOKENS is None:
-        raise Exception("DEEP_MEMORY_MAX_TOKENS is None. Cannot compress to deep memory without a valid token limit.")
-    deep_summary, deep_token_count = compress_to_deep_memory(
-        summaries_to_merge,
-        int(DEEP_MEMORY_MAX_TOKENS),
-        username=username
-    )
-    
+    print(f"✓ Deep memory compression complete!")
+    print(f"  - Deep Memory: {deep_token_count} tokens")
+    print(f"  - Tokenized Chunks ({remaining_chunks}): {remaining_chunks * TOKENIZED_HISTORY_BLOCK_SIZE} tokens (approx)")
+    print(f"  - Recent History: up to {TOKENIZE_THRESHOLD} tokens")
+    print(f"  - TOTAL MEMORY BUDGET: ~{total_memory_tokens} tokens")
+    print(f"{'='*80}\n")
+
+def save_deep_memmory_compression_response(deep_memory, old_chunks, deep_summary, deep_token_count, saved_game_id: int, db: Session, username: str = None):
     if deep_memory:
         # Update existing deep memory
         deep_memory.summary = deep_summary
@@ -354,15 +372,32 @@ def compress_old_chunks_to_deep_memory(saved_game_id: int, db: Session, username
         chunk.is_tokenized = 1
     
     db.commit()
+
+
+def send_deep_memory_compression_request(saved_game_id: int, db: Session, old_chunks, username: str = None):
+    DEEP_MEMORY_MAX_TOKENS = get_setting('DEEP_MEMORY_MAX_TOKENS', db)
+
+    # Get or create deep memory for this game
+    deep_memory = db.query(DeepMemory).filter(
+        DeepMemory.saved_game_id == saved_game_id
+    ).first()
     
-    # Calculate and display total token budget
-    TOKENIZE_THRESHOLD = get_setting('TOKENIZE_THRESHOLD', db)
-    remaining_chunks = chunk_count - chunks_to_compress
-    total_memory_tokens = deep_token_count + (remaining_chunks * get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)) + TOKENIZE_THRESHOLD
+    # Combine old chunks with existing deep memory
+    summaries_to_merge = []
+    if deep_memory:
+        summaries_to_merge.append(deep_memory.summary)
     
-    print(f"✓ Deep memory compression complete!")
-    print(f"  - Deep Memory: {deep_token_count} tokens")
-    print(f"  - Tokenized Chunks ({remaining_chunks}): {remaining_chunks * get_setting('TOKENIZED_HISTORY_BLOCK_SIZE', db)} tokens (approx)")
-    print(f"  - Recent History: up to {TOKENIZE_THRESHOLD} tokens")
-    print(f"  - TOTAL MEMORY BUDGET: ~{total_memory_tokens} tokens")
-    print(f"{'='*80}\n")
+    for chunk in old_chunks:
+        summaries_to_merge.append(chunk.summary)
+    
+    # Ultra-compress into deep memory
+    print(f"DEEP_MEMORY_MAX_TOKENS value: {DEEP_MEMORY_MAX_TOKENS}")
+    if DEEP_MEMORY_MAX_TOKENS is None:
+        raise Exception("DEEP_MEMORY_MAX_TOKENS is None. Cannot compress to deep memory without a valid token limit.")
+    deep_summary, deep_token_count = compress_to_deep_memory(
+        summaries_to_merge,
+        int(DEEP_MEMORY_MAX_TOKENS),
+        username=username
+    )
+
+    return  deep_summary, deep_token_count, deep_memory

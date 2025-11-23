@@ -6,6 +6,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+import re
 import jwt
 from jwt.exceptions import InvalidTokenError
 
@@ -23,18 +24,24 @@ from dependencies import get_db, get_current_user
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
 from ai.schemas_ai_server import *
+from retrieval.describer import describe_entity_ai
+from ai.ai_helpers import perform_deep_summarize_chunk
 
 
 # Helper to get AI settings for a user
 def get_user_ai_settings(user_id: int):
     return get_ai_settings(None, None, user_id)
 
-# Example usage in endpoints:
-# settings = get_user_ai_settings(user_id)
-# STORYTELLER_PROMPT = settings['STORYTELLER_PROMPT']
-# ...
-
 AI_MODEL = "TheBloke/MythoMax-L2-13B-GPTQ"
+# AI_MODEL = "TheBloke/LLaMA-30B-GPTQ"
+# AI_MODEL = "TheBloke/Mixtral-8x7B-v0.1-GPTQ"
+
+# Alternative Mistral Nemo model options (comment/uncomment to test):
+# GPTQ quantized variants (compatible with current GPTQModel.from_quantized loader):
+#AI_MODEL = "mistralai/Mistral-Nemo-Instruct-2407"
+#AI_MODEL = "bartowski/Mistral-Nemo-Instruct-2407-GPTQ"
+#AI_MODEL = "MaziyarPanahi/Mistral-Nemo-Instruct-2407-GPTQ"
+#AI_MODEL = "LoneStriker/Mistral-Nemo-Instruct-2407-GPTQ"
 
 def silent_model_load():
     import os, contextlib
@@ -43,7 +50,10 @@ def silent_model_load():
             tokenizer = AutoTokenizer.from_pretrained(AI_MODEL, use_fast=True)
             model = GPTQModel.from_quantized(
                 AI_MODEL,
-                use_exllama=True,
+                use_exllamav2=True,
+                use_marlin=True,
+                use_machete=True,
+                use_triton=True,
                 use_cuda_fp16=True,
                 trust_remote_code=True,
                 device="cuda:0",
@@ -53,7 +63,7 @@ def silent_model_load():
                 disable_exllamav2=False,
                 disable_marlin=False,
                 disable_machete=False,
-                disable_triton=True,
+                disable_triton=False,
                 revision="main"
             )
             return model, tokenizer
@@ -224,67 +234,18 @@ def flatten_json_prompt(json_data, settings):
 
     return prompt
 
-@app.post("/generate_story/")
-async def generate_story(request: GenerateStoryRequest, db=Depends(get_db), user=Depends(get_current_user)):
-    # Set random seed for reproducibility
-    set_seed(random.randint(0, 2**32 - 1))
+@app.post("/lore/retrieve_tokens")
+async def lore_retrieve_tokens(request: LoreRetrieveRequest, user=Depends(get_current_user)):
+    """Retrieve external lore draft tokens based solely on the user lookup prompt.
 
-    settings = get_user_ai_settings(user.id)
-    # Use settings as needed, e.g. for prompt construction
-    context = request.context
-    user_input = request.user_input or ""
-    include_initial = request.include_initial
+    Ignores story/world preface intentionally to avoid diluting query focus.
+    Non-invasive: does not modify any persistent state. Returns structured draft for user approval.
+    """
+    lookup_text = request.lookup_prompt.strip()
 
-    # Build prompt (GAME_DIRECTIVE removed - redundant)
-    prompt = flatten_json_prompt(context, settings)
+    desc = await describe_entity_ai(lookup_text, user, STORY_TOKENIZER, STORY_GENERATOR)
 
-    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
-    prompt_token_count = inputs.input_ids.shape[-1]
-
-    max_retries = 15
-    text = ""
-    for attempt in range(1, max_retries + 1):
-        output = await run_in_threadpool(
-            lambda: STORY_GENERATOR.generate(
-                **inputs,
-                max_new_tokens=settings.get('RESERVED_FOR_GENERATION', 300),
-                num_return_sequences=1,
-                temperature=0.8,
-                top_p=0.9,
-                repetition_penalty=1.2
-            )
-        )
-        # Decode only the newly generated tokens, not the prompt
-        generated_tokens = output[0][prompt_token_count:]
-        text = STORY_TOKENIZER.decode(generated_tokens, skip_special_tokens=True)
-
-        # Remove lines starting with any stop token
-        for stop_token in settings.get('STOP_TOKENS', []):
-            if text.strip().startswith(stop_token):
-                text = text.strip()[len(stop_token):].lstrip()
-
-        # Remove entire lines containing chapter markers (e.g., "Chapter 1.2.3:" or "1.2.5:" or "1.2:")
-        import re
-        # Remove lines like "Chapter 1.2.3:" or "Chapter 1.2:"
-        text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
-        # Remove lines like "1.2.5:" or "1.2:" at the start of a line
-        text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
-        # Remove the pattern inline if it appears at the start of the text
-        text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
-        
-        # Remove story splitter if it appears in output
-        # if context["GameSettings"]["StorySplitter"] in text:
-        #     text = text.split(context["GameSettings"]["StorySplitter"])[-1].strip()
-        
-        # Remove common prompt artifacts
-        text = re.sub(r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
-        text = text.strip()
-
-        if len(text.strip()) > 0:
-            break
-
-    return {"story": text.strip()}
+    return desc
 
 @app.post("/generate_from_game/")
 async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_current_user)):
@@ -340,7 +301,7 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
                 max_new_tokens=settings.get("RESERVED_FOR_GENERATION", 150),
                 num_return_sequences=1,
                 temperature=0.8,
-                top_p=0.9,
+                top_p=0.6,
                 repetition_penalty=1.2
             )
         )
@@ -373,6 +334,8 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
 
         if len(text.strip()) > 0:
             break
+
+        print(f"OUTPUT:{text}")
 
     return {"story": text.strip()}
 
@@ -494,47 +457,7 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
 
 @app.post("/deep_summarize_chunk/")
 async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(get_current_user)):
-    prompt = request.chunk
-    max_tokens = request.max_tokens
-    #previous_summary = request.previous_summary
-
-    settings = get_user_ai_settings(user.id)
-    SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
-    SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
-
-    prompt+=f"\n{SUMMARY_SPLIT_MARKER}"
-    # Log the token count
-    final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
-    
-    # Single attempt - accept whatever concise summary the AI produces
-    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
-    summary_output = await run_in_threadpool(
-        lambda: STORY_GENERATOR.generate(
-            **inputs,
-            max_new_tokens=max_tokens,
-            num_return_sequences=1,
-            temperature=0.6,
-            top_p=0.75,
-            repetition_penalty=1.1
-        )
-    )
-    summary_text = STORY_TOKENIZER.decode(summary_output[0], skip_special_tokens=True)
-
-    # Strip everything before the marker
-    if SUMMARY_SPLIT_MARKER in summary_text:
-        summary_text = summary_text.split(SUMMARY_SPLIT_MARKER)[-1]
-    
-    summary_text = summary_text.strip()
-    
-    print("\n" + "="*80)
-    print("SUMMARIZE_CHUNK - AI RESPONSE (after split marker removal):")
-    print("="*80)
-    print(summary_text)
-    print(f"Token count: {len(STORY_TOKENIZER.encode(summary_text, add_special_tokens=False))}")
-    print("="*80 + "\n")
-
-    return {"summary": summary_text}
+    return await perform_deep_summarize_chunk(request, user, STORY_TOKENIZER, STORY_GENERATOR)
 
 @app.post("/count_tokens/")
 async def count_tokens(request: Request, username: str = Depends(verify_token)):

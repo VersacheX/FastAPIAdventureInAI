@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import { API_URL } from './config';
 
@@ -8,7 +8,7 @@ function ManageWorlds({ token, onClose, onEditWorld }) {
   const [error, setError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
-  const fetchWorlds = async () => {
+  const fetchWorlds = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -21,11 +21,11 @@ function ManageWorlds({ token, onClose, onEditWorld }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     if (token) fetchWorlds();
-  }, [token]);
+  }, [fetchWorlds, token]);
 
   const handleEdit = (world) => {
     onEditWorld(world);

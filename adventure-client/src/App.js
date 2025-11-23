@@ -40,6 +40,9 @@ function App() {
         setWorldsError(err.response?.data?.detail ?? err.message ?? 'Failed to load worlds');
       });
     }
+    // else {
+    //   handleLogout()
+    // }
   }, [token]);
 
   useEffect(() => {
