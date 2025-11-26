@@ -14,6 +14,7 @@ from business.models import User, SavedGame, StoryHistory, TokenizedHistory, Dee
 from business.converters import saved_game_to_dto
 from ai.ai_settings import get_setting
 from services.memory_service import calculate_active_memory_budget, verify_game_ownership
+from routers.history_router import check_and_tokenize_history
 
 router = APIRouter(prefix="/saved_games", tags=["saved games"])
 
@@ -184,7 +185,6 @@ async def create_saved_game(
     db.commit()
     
     # Ensure initial history entries get token counts
-    from routers.history import check_and_tokenize_history
     check_and_tokenize_history(new_game.id, db, username=current_user.username)
     
     return {"id": new_game.id}
