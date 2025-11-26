@@ -6,10 +6,13 @@ from ai.ai_settings import get_ai_settings
 from ai.schemas_ai_server import *
 from business.models import User
 from starlette.concurrency import run_in_threadpool
+from fastapi import Request
 
+# TODO move to user_service
 def get_user_ai_settings(user_id: int):
     return get_ai_settings(None, None, user_id)
 
+# TODO move to history_service
 def get_recent_memories(memory_log, limit=None):
     """
     Get the most recent memories from a log.
@@ -19,7 +22,7 @@ def get_recent_memories(memory_log, limit=None):
         return memory_log
     return memory_log[-limit:]
 
-
+# THIS CAN STAY REMANE TO build_structured_json_from_context  ... also we should rename this file as ai_service
 def build_structured_json(context, user_input, settings=None):
     """
     Build structured JSON for AI generation.
@@ -63,7 +66,7 @@ def build_structured_json(context, user_input, settings=None):
     }
     return structured 
 
-
+# THIS CAN STAY REMANE TO generate_story
 def generate_story(context, user_input=None, include_initial=False, settings=None, username=None):
     """
     Generate story using AI server.
@@ -88,7 +91,7 @@ def generate_story(context, user_input=None, include_initial=False, settings=Non
         context["history"].append(story.strip())
     return story.strip()
 
-
+# DEFINITELY STAY rename to tokenize_story_history
 def tokenize_history(context, settings=None):
     """
     Tokenize history when enough entries have accumulated.
@@ -130,7 +133,7 @@ def tokenize_history(context, settings=None):
     context["tokenized_history"] = tokenized_history
     return False 
 
-
+# THIS CAN STAY rename to summarize_history_chunk
 def summarize_chunk(chunk, max_tokens=None):
     """
     Summarize a chunk of history entries.
@@ -143,6 +146,17 @@ def summarize_chunk(chunk, max_tokens=None):
     summary = ai_summarize_chunk(chunk, max_tokens)
     return summary
 
+# THIS CAN STAY
+async def perform_count_tokens(request: Request, STORY_TOKENIZER):
+    """Count tokens in a single text string."""
+    import asyncio
+    body = await request.json()
+    text = body.get("text", "")
+    
+    tokens = STORY_TOKENIZER.encode(text)
+    return {"token_count": len(tokens)}
+
+# THIS CAN STAY
 async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user: User, STORY_TOKENIZER, STORY_GENERATOR):
     prompt = request.chunk
     max_tokens = request.max_tokens
@@ -164,8 +178,8 @@ async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user:
             **inputs,
             max_new_tokens=max_tokens,
             num_return_sequences=1,
-            temperature=0.6,
-            top_p=0.75,
+            temperature=0.5,
+            top_p=0.90,
             repetition_penalty=1.1
         )
     )

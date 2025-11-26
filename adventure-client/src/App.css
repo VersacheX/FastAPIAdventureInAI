@@ -117,6 +117,28 @@ html, body {
   }
 }
 
+/* Ensure lore helper inputs stack to full width on small screens */
+@media (max-width:640px) {
+ /* The lore helper panel uses id "lore-helper-panel" in CreateWorld.js. Make its inputs full width */
+ #lore-helper-panel {
+ display: block;
+ }
+ /* Target the second child div inside lore-helper-panel (the row with two inputs) and stack vertically */
+ #lore-helper-panel > div:nth-child(2) {
+ display: flex !important;
+ flex-direction: column !important;
+ gap:8px !important;
+ }
+ #lore-helper-panel input#lookup-prompt,
+ #lore-helper-panel input#lookup-command {
+ width:100% !important;
+ display: block;
+ box-sizing: border-box;
+ }
+ /* give a small gap when stacked */
+ #lore-helper-panel input#lookup-prompt { margin-bottom:0; }
+}
+
 .App-link {
   color: #61dafb;
 }
@@ -358,7 +380,16 @@ html, body {
 .story-edit-textarea { width: 100%; padding: 10px; background: #0b1220; border: 1px solid #0ea5a4; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.95rem; resize: vertical; min-height: 80px; }
 .story-edit-textarea:focus { outline: none; border-color: #0cb5b4; }
 .story-edit-actions { display: flex; gap: 8px; }
-.story-edit-save { padding: 8px 16px; background: #0ea5a4; color: #052023; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 1.1rem; }
+.story-edit-save {
+    padding: 8px 16px;
+    background: #0ea5a4;
+    color: #052023;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 1.1rem
+}
 .story-edit-save:hover { background: #0cb5b4; }
 .story-edit-cancel { padding: 8px 16px; background: #d04848; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 1.1rem; }
 .story-edit-cancel:hover { background: #e05858; }

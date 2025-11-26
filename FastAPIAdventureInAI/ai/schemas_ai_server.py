@@ -34,3 +34,5 @@ class DeepSummarizeChunkRequest(BaseModel):
 class LoreRetrieveRequest(BaseModel):
     lookup_prompt: str
     story_preface: Optional[str] = None
+    command_prompt: Optional[str] = None
+    meta_data: Optional[str] = None

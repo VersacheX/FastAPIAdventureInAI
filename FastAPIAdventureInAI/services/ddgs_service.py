@@ -167,7 +167,15 @@ async def _call_ddgs_lib(query: str, limit: int = 10) -> List[Dict]:
 
 async def _fetch_json(url: str) -> Dict:
     def _get():
-        with request.urlopen(url, timeout=10) as resp:
+        # Use a Request with browser-like headers to avoid simple bot detection
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://duckduckgo.com/",
+        }
+        req = request.Request(url, headers=headers)
+        with request.urlopen(req, timeout=10) as resp:
             data = resp.read()
             return json.loads(data.decode("utf-8", errors="ignore"))
 
@@ -243,7 +251,7 @@ async def ddgs_search(query: str, limit: int = 10) -> List[Dict]:
     return await _instant_answer_fallback(q, limit=limit)
 
 
-async def ddgs_search_urls(query: str, limit: int = 10) -> List[str]:
+async def ddgs_search_urls(query: str, limit: int = 50) -> List[str]:
     results = await ddgs_search(query, limit=limit)
     urls: List[str] = []
     for r in results:

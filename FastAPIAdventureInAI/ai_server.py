@@ -24,8 +24,9 @@ from dependencies import get_db, get_current_user
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
 from ai.schemas_ai_server import *
-from retrieval.describer import describe_entity_ai
-from ai.ai_helpers import perform_deep_summarize_chunk
+from retrieval.lookup_ai_service import describe_entity_ai
+#from retrieval.describer import describe_entity_ai
+from ai.ai_helpers import perform_deep_summarize_chunk, perform_count_tokens
 
 
 # Helper to get AI settings for a user
@@ -70,6 +71,7 @@ def silent_model_load():
 
 STORY_GENERATOR, STORY_TOKENIZER = silent_model_load()
 
+print("WE MADE IT THIS FAR")
 
 app = FastAPI()
 
@@ -242,8 +244,11 @@ async def lore_retrieve_tokens(request: LoreRetrieveRequest, user=Depends(get_cu
     Non-invasive: does not modify any persistent state. Returns structured draft for user approval.
     """
     lookup_text = request.lookup_prompt.strip()
+    command_prompt = (request.command_prompt or "").strip()
+    meta_data = (request.meta_data or "").strip()
 
-    desc = await describe_entity_ai(lookup_text, user, STORY_TOKENIZER, STORY_GENERATOR)
+    # Pass command_prompt through to describer so client can influence response format
+    desc = await describe_entity_ai(lookup_text, user, STORY_TOKENIZER, STORY_GENERATOR, command_prompt=command_prompt or None, meta_data=meta_data or None)
 
     return desc
 
@@ -433,8 +438,8 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
             **inputs,
             max_new_tokens=max_tokens,
             num_return_sequences=1,
-            temperature=0.6,
-            top_p=0.75,
+            temperature=0.2,
+            top_p=0.90,
             repetition_penalty=1.1
         )
     )
@@ -461,13 +466,14 @@ async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(
 
 @app.post("/count_tokens/")
 async def count_tokens(request: Request, username: str = Depends(verify_token)):
-    """Count tokens in a single text string."""
-    import asyncio
-    body = await request.json()
-    text = body.get("text", "")
+    return await perform_count_tokens(request, STORY_TOKENIZER)
+    # """Count tokens in a single text string."""
+    # import asyncio
+    # body = await request.json()
+    # text = body.get("text", "")
     
-    tokens = STORY_TOKENIZER.encode(text)
-    return {"token_count": len(tokens)}
+    # tokens = STORY_TOKENIZER.encode(text)
+    # return {"token_count": len(tokens)}
 
 @app.post("/count_tokens_batch/")
 async def count_tokens_batch(request: Request, username: str = Depends(verify_token)):
