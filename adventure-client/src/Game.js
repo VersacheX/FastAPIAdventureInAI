@@ -113,6 +113,11 @@ function Game({ game, token, onExit, onLogout }) {
       setLocalTokenized(response.data);
     } catch (err) {
       console.error('Failed to fetch tokenized history:', err);
+      // If the token is expired, trigger logout from parent app
+      if (err.response && err.response.status ===401) {
+        // onLogout prop should clear localStorage and navigate to login
+        if (typeof onLogout === 'function') onLogout();
+      }
     }
   };
 

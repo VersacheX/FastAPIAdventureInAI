@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { API_URL } from './config';
 import Login from './Login';
@@ -109,7 +109,7 @@ function App() {
  navigate('/');
  };
 
- const handleLogout = () => {
+ const handleLogout = useCallback(() => {
  try { localStorage.removeItem('ai_token'); } catch (err) {}
  try { localStorage.removeItem('ai_username'); } catch (err) {}
  try { localStorage.removeItem('currentGameId'); } catch (err) {}
@@ -119,7 +119,21 @@ function App() {
  setCurrentGame(null);
  try { localStorage.setItem('ai_logout', Date.now().toString()); } catch (err) {}
  navigate('/');
- };
+ }, [navigate]);
+
+ useEffect(() => {
+     // Global axios response interceptor: logout on401 (expired/invalid token)
+     const interceptor = axios.interceptors.response.use(
+         res => res,
+         err => {
+             if (err.response && err.response.status ===401) {
+                handleLogout();
+             }
+             return Promise.reject(err);
+         }
+     );
+     return () => axios.interceptors.response.eject(interceptor);
+ }, [handleLogout]);
 
  const handleGameLoaded = (game) => {
  if (game) {
