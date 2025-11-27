@@ -19,7 +19,7 @@ from aiadventureinpythonconstants import (
     SAFE_PROMPT_LIMIT,
     MAX_WORLD_TOKENS
 )
-from dependencies import SessionLocal
+from services.orm_service import SessionLocal
 from business.models import GameRating, World, AIDirectiveSettings, AccountLevel, User
 
 

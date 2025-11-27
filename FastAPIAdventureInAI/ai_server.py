@@ -16,22 +16,15 @@ from starlette.concurrency import run_in_threadpool
 from gptqmodel.models import GPTQModel
 from transformers import AutoTokenizer, set_seed
 
-# Load AI settings from database
-from ai.ai_settings import get_ai_settings
-from dependencies import get_db, get_current_user
-
 # Import configuration from environment
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
 from ai.schemas_ai_server import *
-from retrieval.lookup_ai_service import describe_entity_ai
-#from retrieval.describer import describe_entity_ai
-from ai.ai_helpers import perform_deep_summarize_chunk, perform_count_tokens
-
-
-# Helper to get AI settings for a user
-def get_user_ai_settings(user_id: int):
-    return get_ai_settings(None, None, user_id)
+from ai.services.lookup_ai_service import describe_entity_ai
+from ai.services.ai_api_service import perform_deep_summarize_chunk, perform_count_tokens, flatten_json_prompt
+from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
+from shared.services.auth_service import verify_token, get_current_user
+from shared.services.orm_service import get_db
 
 AI_MODEL = "TheBloke/MythoMax-L2-13B-GPTQ"
 # AI_MODEL = "TheBloke/LLaMA-30B-GPTQ"
@@ -71,8 +64,6 @@ def silent_model_load():
 
 STORY_GENERATOR, STORY_TOKENIZER = silent_model_load()
 
-print("WE MADE IT THIS FAR")
-
 app = FastAPI()
 
 # Add CORS middleware
@@ -83,27 +74,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Security
-security = HTTPBearer()
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify JWT token from Authorization header"""
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-            )
-        return username
-    except InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-        )
 
 @app.post("/prime_narrator/")
 async def prime_narrator(db=Depends(get_db), user=Depends(get_current_user)):
@@ -118,123 +88,6 @@ async def prime_narrator(db=Depends(get_db), user=Depends(get_current_user)):
         )
     )
     return {"status": "primed"}
-
-def flatten_json_prompt(json_data, settings):
-    """Build optimized prompt from structured game data with token budget enforcement."""
-    recent_story = json_data.get("RecentStory", [])
-    tokenized_history = json_data.get("TokenizedHistory", [])
-    deep_memory = json_data.get("DeepMemory")  # Ultra-compressed ancient history
-
-    # Core directives and context
-    prompt = (
-        f"# Narrator Directives:\n{json_data['NarratorDirectives']}\n\n"
-        f"# Universe: {json_data['UniverseName']}\n"
-        f"{json_data['UniverseTokens']}\n\n"
-        #f"# Story Preface:\n{json_data['StoryPreface']}\n\n"
-        f"# Player: {json_data['PlayerInfo']['Name']} ({json_data['PlayerInfo']['Gender']})\n"
-        f"# Rating: {json_data['GameSettings']['Rating']}\n\n"
-    )
-    
-    # Count tokens in base prompt
-    base_tokens = len(STORY_TOKENIZER.encode(prompt))
-    #print(f"[Token Budget] Base prompt: {base_tokens} tokens")
-    tokens_used = base_tokens
-    
-    # Reserve tokens for action and continuation
-    current_action = json_data['CurrentAction'].strip()
-    action_text = ""
-    if current_action:
-        action_mode = json_data.get("ActionMode", "ACTION")
-        if action_mode == "SPEECH":
-            action_text = f"# Player Says: \"{current_action}\"\n\n"
-        elif action_mode == "NARRATE":
-            action_text = f"# Player Narrative: {current_action}\n\n"
-        else:
-            action_text = f"# Player Action: {current_action}\n\n"
-    else:
-        action_text = "# No Player Action. Continue the story naturally.\n\n"
-    
-    action_text += f"{json_data['GameSettings']['StorySplitter']}\n"
-    action_tokens = len(STORY_TOKENIZER.encode(action_text))
-    #print(f"[Token Budget] Action section: {action_tokens} tokens")
-    tokens_used += action_tokens
-    
-    # Calculate available budget for history
-    available_tokens = settings.get("SAFE_PROMPT_LIMIT", 3900) - tokens_used
-    
-    #print(f"[Token Budget] Available tokens: {available_tokens}")
-    # Deep memory (ultra-compressed ancient history)
-    if deep_memory and available_tokens > 0:
-        deep_section = f"# Ancient History (Major Events):\n{deep_memory.strip()}\n\n"
-        deep_tokens = len(STORY_TOKENIZER.encode(deep_section))
-        if deep_tokens <= available_tokens:
-            prompt += deep_section
-            tokens_used += deep_tokens
-            available_tokens -= deep_tokens
-
-    total_block_tokens = 0
-    # Compressed history (if available) - just use the most recent summaries
-    if tokenized_history and available_tokens > 0:
-        history_section = "# Past Events:\n"
-        # Start with most recent and work backwards until we run out of budget
-        recent_blocks = list(reversed(tokenized_history[-settings.get("MAX_TOKENIZED_HISTORY_BLOCK", 4):]))
-        blocks_to_include = []       
-
-        for block in recent_blocks:
-            summary = block.get("summary", "").strip()
-            if summary:
-                block_text = f"{summary}\n\n"
-                block_tokens = len(STORY_TOKENIZER.encode(block_text))
-                if block_tokens <= available_tokens:
-                    total_block_tokens += block_tokens
-                    blocks_to_include.insert(0, block_text)  # Insert at beginning to maintain order
-                    available_tokens -= block_tokens
-                else:
-                    break  # Stop if we can't fit more
-        
-        #print(f"[Token Budget] Compressed history tokens:{total_block_tokens}")
-        if blocks_to_include:
-            prompt += history_section
-            for block_text in blocks_to_include:
-                prompt += block_text
-            tokens_used = settings.get("SAFE_PROMPT_LIMIT", 3900) - available_tokens
-
-    #print(f"[Token Budget] After deep memory and compressed history: {tokens_used} tokens used, {available_tokens} tokens left.")
-    
-    total_entry_tokens = 0
-    # Recent chronological story - also budget constrained
-    if recent_story and available_tokens > 0:
-        story_section = "# Recent Story:\n"
-        # Start with most recent and work backwards
-        recent_entries = list(reversed(recent_story))
-        entries_to_include = []
-        
-        for entry in recent_entries:
-            entry_text = f"{entry.strip()}\n\n"
-            entry_tokens = len(STORY_TOKENIZER.encode(entry_text))
-            if entry_tokens <= available_tokens:
-                total_entry_tokens += entry_tokens
-                entries_to_include.insert(0, entry_text)  # Insert at beginning to maintain order
-                available_tokens -= entry_tokens
-            else:
-                break  # Stop if we can't fit more
-        #print(f"[Token Budget] Recent story entries included tokens: {total_entry_tokens}")
-        if entries_to_include:
-            prompt += story_section
-            for entry_text in entries_to_include:
-                prompt += entry_text
-
-    # Add action section (already calculated above)
-    prompt += action_text
-    
-    # Log final token count for debugging
-    final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3901) })")
-    print(f"[Token Budget] MEMORIES: {total_block_tokens} ACTIONS: {action_tokens} BASE: {base_tokens} RECENT HISTORY: {total_entry_tokens}")
-    # if(final_tokens != total_block_tokens + action_tokens + base_tokens + total_entry_tokens):
-    #     print(f"Token count mismatch detected! {final_tokens} != {total_block_tokens + action_tokens + base_tokens + total_entry_tokens}")
-
-    return prompt
 
 @app.post("/lore/retrieve_tokens")
 async def lore_retrieve_tokens(request: LoreRetrieveRequest, user=Depends(get_current_user)):
@@ -285,7 +138,7 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     }
     
     # Generate story using the structured JSON (GAME_DIRECTIVE removed - redundant)
-    prompt = flatten_json_prompt(structured_json, settings)
+    prompt = flatten_json_prompt(structured_json, settings, STORY_TOKENIZER)
     
     # Print the full prompt to console
     # print("\n" + "="*80)
@@ -467,13 +320,6 @@ async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(
 @app.post("/count_tokens/")
 async def count_tokens(request: Request, username: str = Depends(verify_token)):
     return await perform_count_tokens(request, STORY_TOKENIZER)
-    # """Count tokens in a single text string."""
-    # import asyncio
-    # body = await request.json()
-    # text = body.get("text", "")
-    
-    # tokens = STORY_TOKENIZER.encode(text)
-    # return {"token_count": len(tokens)}
 
 @app.post("/count_tokens_batch/")
 async def count_tokens_batch(request: Request, username: str = Depends(verify_token)):

@@ -11,7 +11,7 @@ if __name__ == "__main__":
     # Step 1: Create tables
     print("\n[Step 1/2] Creating database tables...")
     try:
-        from dependencies import engine
+        from services.orm_service import engine
         from business.models import Base
         Base.metadata.create_all(bind=engine)
         print("✓ Database tables created successfully")

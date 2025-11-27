@@ -44,11 +44,6 @@ def tokenized_history_to_dto(th: TokenizedHistory) -> TokenizedHistoryDTO:
     return TokenizedHistoryDTO.model_validate(th)
 
 def saved_game_to_dto(game: SavedGame, history_list, tokenized_history_list, db=None) -> SavedGameDTO:
-    # Import here to avoid circular import issues if any
-    from business.models import World, GameRating
-    from business.dtos import SavedGameDTO
-    from ai.ai_settings import get_ai_settings
-
     # Fetch world and rating names and details
     world_name = ""
     world_tokens = ""
