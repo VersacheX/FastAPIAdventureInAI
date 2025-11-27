@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from argon2 import PasswordHasher, exceptions
 from jose import jwt
 from sqlalchemy.orm import Session
+from jose.exceptions import JWTError
 
 # Security
 import jwt

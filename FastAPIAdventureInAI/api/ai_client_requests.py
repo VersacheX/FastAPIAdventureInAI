@@ -35,7 +35,7 @@ def _get_ai_auth_headers(username: str = None):
 #     payload = {"text": text}
     
 #     try:
-#         resp = requests.post(f"{AI_SERVER_URL}/count_tokens/", json=serialize_for_json(payload), headers=headers)
+#         resp = requests.post(f"{AI_SERVER_URL}/tokens/count_tokens/", json=serialize_for_json(payload), headers=headers)
 #         resp.raise_for_status()
 #         return resp.json()["token_count"]
 #     except Exception as e:
@@ -84,7 +84,7 @@ def ai_count_tokens_batch(texts: list[str], username: str = None) -> list[int]:
     """
     try:
         response = requests.post(
-            f"{AI_SERVER_URL}/count_tokens_batch/",
+            f"{AI_SERVER_URL}/tokens/count_tokens_batch/",
             json={"texts": texts},
             headers=_get_ai_auth_headers(username),
             timeout=10

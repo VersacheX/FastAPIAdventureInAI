@@ -70,7 +70,7 @@ function CreateWorld({ token, onBack, onWorldCreated, worldToEdit = null }) {
           "characters",
         );
         const response = await axios.post(
-          `${AI_URL}/count_tokens/`,
+          `${AI_URL}/tokens/count_tokens/`,
           { text: combinedText },
           {
             headers: {

@@ -19,69 +19,176 @@ An AI-powered interactive text adventure game with dynamic story generation usin
 - **FastAPI** - Modern async Python web framework
 - **SQLAlchemy** - ORM for database management
 - **SQLite** - Embedded database (can be swapped for PostgreSQL/MySQL)
-- **PyTorch + Transformers** - AI model loading and inference
-- **CUDA** - GPU acceleration for model inference
+- **PyTorch + Transformers** - AI model loading and inference (local GPTQ models)
+- **CUDA** - GPU acceleration for model inference (optional)
 
 ### Frontend
 - **React** - UI framework
 - **Axios** - API communication
 - **CSS** - Custom styling
 
-### Directory Structure
+### Directory Structure (actual repository layout)
+```text
+FastAPIAdventureInAI/ # repo root
+├── .env.example
+├── README.md
+├── requirements.txt
+├── SETUP.md
+├── SETUP_database.py
+├── FastAPIAdventureInAI.sln
+├── FastAPIAdventureInAI.pyproj
+├── quick_setup.bat
+├── quick_setup.sh
+├── tools/ # utility scripts
+│ ├── run_extractor.py
+│ ├── scan_site_dumps.py
+│ ├── scan_site_dumps_fixed.py
+│ ├── generate_dom_json.py
+│ └── analyze_hosts.py
+├── ai_main.py # helper entry that runs the AI server (runs `ai_server:app`)
+└── FastAPIAdventureInAI/ # backend package
+ ├── __init__.py
+ ├── aiadventureinpythonconstants.py
+ ├── config.py
+ ├── data_server.py # FastAPI app wiring (includes routers)
+ ├── main.py # helper entry that runs the backend (runs `data_server:app`)
+ ├── ai_server.py # standalone AI inference server (optional separate process)
+ ├── seed_data.py
+ ├── setup_database.py
+ ├── api/
+ │ ├── __init__.py
+ │ ├── ai_client_requests.py
+ │ ├── routers/
+ │ │ ├── __init__.py
+ │ │ ├── auth_router.py
+ │ │ ├── users_router.py
+ │ │ ├── worlds_router.py
+ │ │ ├── game_ratings_router.py
+ │ │ ├── history_router.py
+ │ │ ├── saved_games_router.py
+ │ │ ├── tokenized_history_router.py
+ │ │ └── deep_memory_router.py
+ │ └── services/
+ │ ├── __init__.py
+ │ ├── data_api_auth_service.py
+ │ ├── users_service.py
+ │ ├── worlds_service.py
+ │ ├── history_service.py
+ │ ├── tokenized_history_service.py
+ │ ├── deep_memory_service.py
+ │ └── saved_games_service.py
+ ├── ai/
+ │ ├── __init__.py
+ │ ├── schemas_ai_server.py
+ │ ├── routers/
+ │ │ ├── __init__.py
+ │ │ ├── root_router.py
+ │ │ ├── tokens_router.py
+ │ │ └── lore_router.py
+ │ ├── services/
+ │ │ ├── __init__.py
+ │ │ ├── ai_api_service.py
+ │ │ ├── ai_modeler_service.py
+ │ │ ├── lookup_ai_service.py
+ │ │ ├── http_service.py
+ │ │ ├── ddgs_service.py
+ │ │ └── extractors/
+ │ │ ├── __init__.py
+ │ │ ├── common.py
+ │ │ └── generic_extractor.py
+ │ └── lookup_ai/
+ │ ├── __init__.py
+ │ ├── fetch_sources.py
+ │ ├── section_selector.py
+ │ ├── query_terms.py
+ │ └── services/
+ │ ├── __init__.py
+ │ ├── wikipedia_service.py
+ │ ├── fandom_service.py
+ │ ├── lol_wiki_service.py
+ │ ├── leagueoflegends_service.py
+ │ ├── product_page_service.py
+ │ ├── fanlore_service.py
+ │ ├── gluwee_service.py
+ │ ├── halloweencostumes_service.py
+ │ ├── costumerealm_service.py
+ │ └── animecharacters_service.py
+ ├── business/
+ │ ├── __init__.py
+ │ ├── converters/
+ │ │ ├── __init__.py
+ │ │ └── converters.py
+ │ ├── dtos/
+ │ │ ├── __init__.py
+ │ │ └── dtos.py
+ │ ├── models/
+ │ │ ├── __init__.py
+ │ │ └── models.py
+ │ └── schemas/
+ │ ├── __init__.py
+ │ └── schemas_api.py
+ ├── shared/
+ │ ├── __init__.py
+ │ ├── helpers/
+ │ │ ├── __init__.py
+ │ │ ├── ai_settings.py
+ │ │ └── memory_helper.py
+ │ └── services/
+ │ ├── __init__.py
+ │ ├── auth_service.py
+ │ └── orm_service.py
+ └── tools/
+ └── (project-specific helpers and scripts)
+
+adventure-client/ # React frontend
+├── package.json
+├── package-lock.json
+├── public/
+│ ├── index.html
+│ ├── manifest.json
+│ └── robots.txt
+└── src/
+ ├── index.js
+ ├── index.css
+ ├── App.js
+ ├── App.css
+ ├── Login.js
+ ├── NewGame.js
+ ├── CreateWorld.js
+ ├── Game.js
+ ├── LoadGame.js
+ ├── ManageWorlds.js
+ ├── ManageWorlds.js
+ ├── config.js
+ └── tests/
+ └── (react tests)
 ```
-FastAPIAdventureInAI/
-├── FastAPIAdventureInAI/          # Backend Python application
-│   ├── business/                   # Business logic layer
-│   │   ├── models/                 # Database models
-│   │   ├── dtos/                   # Data transfer objects
-│   │   ├── converters/             # Model-to-DTO converters
-│   │   ├── schemas/                # API request/response schemas
-│   │   └── game_service.py         # Game setup logic
-│   ├── ai/                         # AI integration layer
-│   │   ├── ai_settings.py          # AI configuration loader
-│   │   ├── ai_client_requests.py   # AI server HTTP client
-│   │   ├── schemas_ai_server.py    # AI request schemas
-│   │   └── ai_helpers.py           # Story generation helpers
-│   ├── routers/                    # API route handlers
-│   ├── services/                   # Shared business services
-│   ├── ai_server.py                # Standalone AI inference server
-│   ├── main.py                     # FastAPI application entry
-│   ├── seed_data.py                # Database seeding script
-│   └── config.py                   # Configuration management
-└── adventure-client/               # React frontend
-    ├── src/
-    │   ├── App.js                  # Main application component
-    │   ├── Login.js                # Authentication
-    │   ├── Game.js                 # Game interface
-    │   ├── NewGame.js              # Game creation
-    │   └── ManageWorlds.js         # World management
-    └── public/
-```
+
 
 ## Prerequisites
 
 ### System Requirements
-- **Python**: 3.10+ (recommended 3.10 for best compatibility)
-- **Node.js**: 16+ and npm
-- **CUDA**: 11.8+ (for GPU acceleration)
-- **GPU**: NVIDIA GPU with 8GB+ VRAM (for running the AI model)
-- **RAM**: 16GB+ recommended
-- **Storage**: 20GB+ free space for models
+- **Python**:3.10+ (recommended3.10 for best compatibility)
+- **Node.js**:16+ and npm (for frontend)
+- **CUDA**: Optional, required for GPU acceleration
+- **GPU**: Recommended for local model inference (8GB+ VRAM suggested)
+- **RAM**:16GB+ recommended
+- **Storage**:20GB+ free space for models
 
 ### Software Dependencies
 - Git
 - Python virtual environment (venv)
-- Visual Studio Build Tools (Windows) or gcc/g++ (Linux)
+- Build tools for native packages (Visual Studio Build Tools on Windows or gcc/g++ on Linux)
 
 ## Installation
 
-### 1. Clone the Repository
+###1. Clone the Repository
 ```bash
 git clone https://github.com/VersacheX/FastAPIAdventureInAI.git
 cd FastAPIAdventureInAI
 ```
 
-### 2. Backend Setup
+###2. Backend Setup
 
 #### Create Python Virtual Environment
 ```bash
@@ -92,12 +199,12 @@ python -m venv env
 #### Activate Virtual Environment
 **Windows (PowerShell):**
 ```powershell
-.\env\Scripts\Activate.ps1
+.\\env\\Scripts\\Activate.ps1
 ```
 
 **Windows (CMD):**
 ```cmd
-.\env\Scripts\activate.bat
+.\\env\\Scripts\\activate.bat
 ```
 
 **Linux/Mac:**
@@ -110,26 +217,12 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-**Note**: If you encounter CUDA/PyTorch issues, install PyTorch separately first:
-```bash
-# For CUDA 11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# For CUDA 12.1
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
+If you have CUDA/PyTorch compatibility issues, install PyTorch separately using the instructions from the PyTorch website for your CUDA version.
 
 #### Configure Database
-Edit `config.py` to set your database connection:
+Edit `FastAPIAdventureInAI/config.py` to set your database connection (default is SQLite):
 ```python
-# For SQLite (default)
 DATABASE_URL = "sqlite:///./adventure.db"
-
-# For PostgreSQL
-# DATABASE_URL = "postgresql://user:password@localhost/adventure_db"
-
-# For SQL Server
-# DATABASE_URL = "mssql+pyodbc://user:password@server/database?driver=SQL+Server"
 ```
 
 #### Create Database Tables
@@ -142,220 +235,106 @@ python -c "from dependencies import engine; from business.models import Base; Ba
 python seed_data.py
 ```
 
-This will create:
-- Default game ratings (Family Friendly, Mature, Unrestricted)
-- System worlds (Terminator Nexus, Mad Max Wasteland)
-- AI directive settings (Basic and Elite tiers)
-- Account levels
-- Admin user (username: `admin`, password: `admin123`)
+This will create default game ratings, pre-built worlds, AI directive settings, account levels, and an admin user.
 
-**⚠️ IMPORTANT**: Change the admin password after first login!
+## Download AI Model
 
-### 3. Frontend Setup
+The project uses a local GPTQ-compatible model. The active model constant is defined in `FastAPIAdventureInAI/ai/services/ai_modeler_service.py` as `AI_MODEL`.
 
-```bash
-cd ../adventure-client
-npm install
-```
-
-### 4. Download AI Model
-
-The application uses **MythoMax-L2-13B-GPTQ** (or similar GPTQ models). Download and place in an accessible directory.
-
-**Recommended model**: [TheBloke/MythoMax-L2-13B-GPTQ](https://huggingface.co/TheBloke/MythoMax-L2-13B-GPTQ)
-
-Update the model path in `ai_server.py`:
-```python
-MODEL_NAME = "path/to/your/model/MythoMax-L2-13B-GPTQ"
-```
+Recommended model: `TheBloke/MythoMax-L2-13B-GPTQ` (or another compatible GPTQ model). Update `AI_MODEL` in `ai/services/ai_modeler_service.py` if you place the model locally or want to switch models.
 
 ## Running the Application
 
-You need to run **three separate processes**:
+You typically run two processes (three if you run the frontend locally):
 
-### Terminal 1: AI Inference Server
+### Terminal1: AI Inference Server (optional separate process)
+You can start the AI server either by running `ai_server.py` directly or using `ai_main.py` which launches the same app with Uvicorn.
+Run the standalone AI server which loads the local model and serves inference on port9000:
 ```bash
 cd FastAPIAdventureInAI
-.\env\Scripts\Activate.ps1  # Activate venv
-python ai_server.py
+.\\env\\Scripts\\Activate.ps1 # or activate your venv
+python ai_main.py
 ```
-This starts the AI model server on `http://localhost:9000`
+This starts the AI model server on `http://localhost:9000`.
 
-### Terminal 2: FastAPI Backend
+> Note: `ai_server.py` and the model loader in `ai/services/ai_modeler_service.py` are responsible for loading the local GPTQ model. If you prefer the backend to directly load the model into FastAPI app state, the code already supports loading the model into `app.state`.
+
+### Terminal2: FastAPI Backend
+Start the backend API (uses `data_server.py` via `main.py`):
 ```bash
 cd FastAPIAdventureInAI
-.\env\Scripts\Activate.ps1  # Activate venv
+.\\env\\Scripts\\Activate.ps1
 python main.py
 ```
-This starts the API server on `http://0.0.0.0:8080`
+This starts the API server (default host `0.0.0.0`) on port8080 by default.
 
-### Terminal 3: React Frontend
+Alternatively you can run:
+```bash
+python data_server.py
+```
+
+### Terminal3: React Frontend
 ```bash
 cd adventure-client
+npm install
 npm start
 ```
-This starts the development server on `http://localhost:3000`
+This starts the frontend development server on `http://localhost:3000`.
 
 ## Usage
 
 1. Open browser to `http://localhost:3000`
-2. Login with:
-   - **Username**: `admin`
-   - **Password**: `admin123`
-3. Create a new game:
-   - Choose a world (Terminator Nexus or Mad Max Wasteland)
-   - Select content rating
-   - Enter player name and gender
-4. Start playing!
+2. Login with the seeded admin account (if present) or register a user
+3. Create a new game and start playing
 
 ## Configuration
 
-### API Settings (`config.py`)
+### API Settings (`FastAPIAdventureInAI/config.py`)
 ```python
-SECRET_KEY = "your-secret-key-here"  # Change in production!
+SECRET_KEY = "your-secret-key-here" # Change in production!
 DATABASE_URL = "sqlite:///./adventure.db"
 AI_SERVER_URL = "http://127.0.0.1:9000"
+CORS_ORIGINS = ["http://localhost:3000"]
 ```
 
 ### AI Model Settings
-Adjust token budgets and memory limits in `aiadventureinpythonconstants.py`:
-```python
-MAX_TOKENS = 4096                   # Model context window
-RECENT_MEMORY_LIMIT = 12            # Recent history entries
-TOKENIZE_THRESHOLD = 850            # Trigger compression at N tokens
-TOKENIZED_HISTORY_BLOCK_SIZE = 230  # Tokens per compressed chunk
-DEEP_MEMORY_MAX_TOKENS = 300        # Ultra-compressed history size
-```
-
-### Frontend Settings (`adventure-client/src/config.js`)
-```javascript
-export const API_URL = 'http://192.168.1.12:8080';  // Your API server address
-```
+Token budgets and memory limits can be adjusted in the AI helpers and settings files under `ai/` and `shared/helpers/`.
 
 ## Memory Management System
 
-The application uses a sophisticated three-tier memory compression system:
+The application uses a three-tier memory compression system:
+1. Recent History (uncompressed): last entries kept in full
+2. Tokenized Chunks (compressed): older entries summarized into token-sized blocks
+3. Deep Memory (ultra-compressed): ancient history compressed further
 
-1. **Recent History** (uncompressed): Last 12-15 story entries, full text
-2. **Tokenized Chunks** (compressed): Older entries summarized into ~230 token blocks
-3. **Deep Memory** (ultra-compressed): Ancient history compressed to ~300 tokens
-
-This ensures the AI always has relevant context while staying within the 4096 token model limit.
+This keeps prompts within model context windows while preserving key story information.
 
 ## Development
 
-### Adding New Worlds
-1. Edit `aiadventureinpythonconstants.py`
-2. Add new entry to `STORY_SETUPS` dict:
-```python
-STORY_SETUPS = {
-    "Your World Name": {
-        "preface": "Opening scene description...",
-        "world_tokens": "World lore and context..."
-    }
-}
-```
-3. Run `python seed_data.py` to add to database
-
 ### Adding API Endpoints
-1. Create/edit router in `routers/`
-2. Import and register in `main.py`:
-```python
-from routers import your_router
-app.include_router(your_router.router)
-```
+1. Create/edit a router under `api/routers/` or `ai/routers/` for AI-specific endpoints
+2. Register the router in `data_server.py` (or main wiring)
 
 ### Database Migrations
 When changing models:
-1. Update models in `business/models/models.py`
-2. Manually update database or use Alembic (not currently configured)
+1. Update models under `business/models/`
+2. Update the database schema manually or integrate Alembic
 
 ## Troubleshooting
 
-### "ModuleNotFoundError"
-- Ensure virtual environment is activated
-- Run `pip install -r requirements.txt` again
-
-### "CUDA out of memory"
-- Reduce `RECENT_MEMORY_LIMIT` in constants
-- Use a smaller model
-- Close other GPU-intensive applications
-
-### "Port already in use"
-- Change port in `main.py` (FastAPI) or `ai_server.py`
-- Kill process using the port: `netstat -ano | findstr :8080`
-
-### Frontend can't connect to backend
-- Check `API_URL` in `adventure-client/src/config.js`
-- Ensure CORS is configured correctly in `main.py`
-- Verify both servers are running
-
-### Database errors
-- Delete `adventure.db` and recreate: `python seed_data.py`
-- Check `DATABASE_URL` in `config.py`
-
-## Security Notes
-
-⚠️ **For Development Only**:
-- Change `SECRET_KEY` in production
-- Change default admin password immediately
-- Use HTTPS in production
-- Don't expose AI server publicly
-- Use environment variables for secrets
-
-## Performance Tips
-
-1. **GPU Memory**: The AI model needs ~7-8GB VRAM
-2. **First Request**: Model loading takes 30-60 seconds on first AI call
-3. **Response Time**: Story generation takes 5-15 seconds depending on GPU
-4. **Token Budget**: Monitor console logs for token usage warnings
+### Common issues
+- Ensure virtual environment is activated and dependencies installed
+- For CUDA OOM errors: use a smaller model, reduce memory usage, or run on CPU
+- If ports are in use, change the port in `main.py` or `ai_server.py`
 
 ## API Documentation
+Once running backend, visit:
+- Swagger UI: `http://localhost:8080/docs`
+- ReDoc: `http://localhost:8080/redoc`
 
-Once running, visit:
-- **Swagger UI**: `http://localhost:8080/docs`
-- **ReDoc**: `http://localhost:8080/redoc`
+## Security Notes
+- Change `SECRET_KEY` and default passwords before production
+- Use HTTPS and proper credentials in production
 
 ## License
-
-[Add your license here]
-
-## Contributing
-
-[Add contribution guidelines]
-
-## Credits
-
-- Built with FastAPI, React, and PyTorch
-- AI Model: MythoMax-L2-13B-GPTQ by TheBloke
-- GPTQ quantization by AutoGPTQ
-
-## Support
-
-For issues and questions:
-- GitHub Issues: [Repository Issues](https://github.com/VersacheX/FastAPIAdventureInAI/issues)
-
-## Suggestions & Contact
-
-For suggestions, feedback, or questions, please email:
-
-**lulhamjessie@aol.com**
-
-I welcome all ideas to improve the project!
-
-## Author
-
-Project created and maintained by Jessie Lulham.
-
-For suggestions or feedback, email: lulhamjessie@aol.com
-
-## PyTorch & CUDA Setup
-
-This project uses PyTorch with CUDA 12.6 for GPU acceleration.
-
-**Recommended installation for CUDA 12.6:**
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-```
-
-If you use a different CUDA version, visit the [PyTorch Get Started page](https://pytorch.org/get-started/locally/) for the correct installation command.
+Add your license here.
