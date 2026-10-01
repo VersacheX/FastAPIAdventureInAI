@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends
 from ai.schemas_ai_server import LoreRetrieveRequest
 from ai.services.ai_modeler_service import get_model
-from shared.services.auth_service import get_current_user
+from shared.services.auth_service import get_current_claims
 from ai.services.lookup_ai_service import describe_entity_ai
 
 
 router = APIRouter(tags=["authentication"])
 
 @router.post("/lore/retrieve_tokens")
-async def lore_retrieve_tokens(request: LoreRetrieveRequest, user=Depends(get_current_user), engine = Depends(get_model)):
+async def lore_retrieve_tokens(request: LoreRetrieveRequest, user=Depends(get_current_claims), engine = Depends(get_model)):
     """Retrieve external lore draft tokens based solely on the user lookup prompt.
 
     Ignores story/world preface intentionally to avoid diluting query focus.

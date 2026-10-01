@@ -21,7 +21,7 @@ from ai.schemas_ai_server import *
 from ai.services.ai_api_service import perform_deep_summarize_chunk, perform_count_tokens, flatten_json_prompt, build_story_messages
 from ai.services.ai_modeler_service import load_story_generater_to_app_state, get_model
 from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
-from shared.services.auth_service import verify_token, get_current_user
+from shared.services.auth_service import verify_token, get_current_claims
 from shared.services.orm_service import get_db
 
 
@@ -114,7 +114,7 @@ def is_echo_of_history(text: str, recent_entries) -> bool:
 
 
 @router.post("/prime_narrator/")
-async def prime_narrator(db=Depends(get_db), user=Depends(get_current_user), engine = Depends(get_model)):
+async def prime_narrator(db=Depends(get_db), user=Depends(get_current_claims), engine = Depends(get_model)):
     #settings = get_user_ai_settings(user.id)
     # You can use settings here if needed
     _ = await run_in_threadpool(
@@ -123,7 +123,7 @@ async def prime_narrator(db=Depends(get_db), user=Depends(get_current_user), eng
     return {"status": "primed"}
 
 @router.post("/generate_from_game/")
-async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_current_user), engine = Depends(get_model)):
+async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_current_claims), engine = Depends(get_model)):
     # """
     # Accepts game data directly and builds structured JSON before generating story.
     # This endpoint is designed for React clients to call directly.
@@ -171,7 +171,11 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     # print(messages)
     # print("="*80 + "\n")
 
-    max_retries = 15
+    # Cap retries low: StoryEngine serialises ALL model access, so a single
+    # request looping many full generations would monopolise the GPU and block
+    # every other inference request. A false-positive prose/echo rejection must
+    # not stall the server, so we accept whatever we have after a few attempts.
+    max_retries = 4
     text = ""
     for attempt in range(1, max_retries + 1):
         text = await run_in_threadpool(
@@ -226,7 +230,7 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     return {"story": text.strip()}
 
 @router.post("/summarize_chunk/")
-async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_current_user), engine = Depends(get_model)):
+async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_current_claims), engine = Depends(get_model)):
     chunk = request.chunk
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
@@ -340,5 +344,5 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
 
 
 @router.post("/deep_summarize_chunk/")
-async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(get_current_user), engine = Depends(get_model)):
+async def deep_summarize_chunk(request: DeepSummarizeChunkRequest, user=Depends(get_current_claims), engine = Depends(get_model)):
     return await perform_deep_summarize_chunk(request, user, engine)

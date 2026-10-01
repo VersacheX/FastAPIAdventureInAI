@@ -15,6 +15,11 @@ from sqlalchemy.orm import sessionmaker
 global _settings_cache
 _settings_cache = {}    
 
+# TTL (seconds) for remotely-fetched settings. The remote cache lives in the
+# AI-server process and cannot be invalidated directly by the data server, so a
+# short TTL bounds how long a cross-process settings edit can go unseen.
+_REMOTE_CACHE_TTL_SECONDS = 60
+
 
 def _default_ai_settings():
     """Assemble an AI settings dict from the hardcoded constants module.
@@ -99,12 +104,20 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
 
 def _get_ai_settings_from_remote(settings_id: int = None, user_id: int = None, force_reload: bool = False):
     """Fetch the fully-built settings dict from the data server over HTTP."""
+    import time
     import requests
     from config import SETTINGS_REMOTE_URL
 
     cache_key = ("remote", settings_id, user_id)
-    if cache_key in _settings_cache and not force_reload:
-        return _settings_cache[cache_key]
+    # The remote cache lives in THIS (AI-server) process, while the data server
+    # invalidates its own cache on PATCH. To make cross-process edits propagate
+    # without a long-lived stale value, remote entries carry a short TTL and are
+    # re-fetched once expired.
+    cached = _settings_cache.get(cache_key)
+    if cached and not force_reload:
+        value, expires_at = cached
+        if time.monotonic() < expires_at:
+            return value
 
     params = {}
     if settings_id is not None:
@@ -118,7 +131,7 @@ def _get_ai_settings_from_remote(settings_id: int = None, user_id: int = None, f
     settings_dict = resp.json()
 
     # STOP_TOKENS may arrive as a list already; leave as-is.
-    _settings_cache[cache_key] = settings_dict
+    _settings_cache[cache_key] = (settings_dict, time.monotonic() + _REMOTE_CACHE_TTL_SECONDS)
     return settings_dict
 
 

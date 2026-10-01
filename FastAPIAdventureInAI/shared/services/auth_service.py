@@ -147,6 +147,39 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     """
     Dependency that validates JWT token and returns the current authenticated user.
     Raises 401 if token is invalid or user not found.
+
+    This dependency is FAIL-CLOSED: if the database query raises, the request is
+    rejected. Routes that must operate without database access (the DB-less AI
+    inference server) should depend on `get_current_claims` instead.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+    except (JWTError, InvalidTokenError):
+        raise credentials_exception
+
+    user = get_user_by_username(db, username)
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+def get_current_claims(token: str = Depends(oauth2_scheme)):
+    """Claims-only auth dependency for the DB-less AI inference server.
+
+    Validates the JWT and returns a lightweight user built from the token claims
+    (including the `user_id` carried from login) WITHOUT touching the database.
+    Use this ONLY on inference routes that explicitly support DB-less operation;
+    it intentionally does not verify the account still exists.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -164,21 +197,7 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     except (JWTError, InvalidTokenError):
         raise credentials_exception
 
-    # Look the user up in the database. If the database is unreachable (e.g. the
-    # AI/GPU box running without SQL Server access), fall back to a lightweight
-    # user built from the validated token so inference endpoints still work.
-    # The user id is carried in the token so account-level settings can still be
-    # resolved per-user even when this server cannot reach the database.
-    try:
-        user = get_user_by_username(db, username)
-    except Exception as e:
-        import sys
-        print(f"[auth_service] WARNING: DB unavailable, using token-only user: {e}", file=sys.stderr)
-        stub = User()
-        stub.id = token_user_id
-        stub.username = username
-        return stub
-
-    if user is None:
-        raise credentials_exception
-    return user
+    stub = User()
+    stub.id = token_user_id
+    stub.username = username
+    return stub

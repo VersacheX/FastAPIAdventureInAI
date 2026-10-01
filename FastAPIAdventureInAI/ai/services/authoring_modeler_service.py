@@ -7,6 +7,7 @@ ai_modeler_service.py so routers can depend on it the same way, but the underlyi
 model is a chat-capable llama_cpp.Llama instead of a GPTQ + HF tokenizer pair.
 """
 import sys
+import threading
 
 from llama_cpp import Llama
 from fastapi import Request
@@ -16,6 +17,14 @@ from config import (
     AUTHORING_MODEL_CTX,
     AUTHORING_MODEL_GPU_LAYERS,
 )
+
+
+# llama_cpp.Llama is NOT thread-safe: it keeps a single shared KV cache and
+# token-position counter. The authoring app shares one Llama instance across
+# requests and both endpoints call create_chat_completion in a thread pool, so
+# concurrent calls would corrupt the cache and crash. This lock serialises all
+# access to the shared authoring model, mirroring StoryEngine.
+_authoring_model_lock = threading.Lock()
 
 
 def silent_authoring_model_load():
@@ -68,5 +77,6 @@ def generate_authoring_json(
     if force_json:
         kwargs["response_format"] = {"type": "json_object"}
 
-    output = llm.create_chat_completion(**kwargs)
+    with _authoring_model_lock:
+        output = llm.create_chat_completion(**kwargs)
     return output["choices"][0]["message"]["content"]
