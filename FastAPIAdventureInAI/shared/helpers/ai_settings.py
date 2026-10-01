@@ -15,22 +15,103 @@ from sqlalchemy.orm import sessionmaker
 global _settings_cache
 _settings_cache = {}    
 
+
+def _default_ai_settings():
+    """Assemble an AI settings dict from the hardcoded constants module.
+
+    Used as a fallback when the database is unreachable (e.g. the AI/GPU box
+    running in WSL without SQL Server access). This lets the AI server operate
+    as a pure inference engine with no database dependency.
+    """
+    import aiadventureinpythonconstants as C
+    return {
+        'STORYTELLER_PROMPT': C.STORYTELLER_PROMPT,
+        'GAME_DIRECTIVE': C.GAME_DIRECTIVE,
+        'SUMMARY_SPLIT_MARKER': C.SUMMARY_SPLIT_MARKER,
+        'STOP_TOKENS': list(C.STOP_TOKENS),
+        'RECENT_MEMORY_LIMIT': C.RECENT_MEMORY_LIMIT,
+        'MEMORY_BACKLOG_LIMIT': C.MEMORY_BACKLOG_LIMIT,
+        'TOKENIZE_HISTORY_CHUNK_SIZE': C.TOKENIZE_HISTORY_CHUNK_SIZE,
+        'TOKENIZE_THRESHOLD': C.TOKENIZE_THRESHOLD,
+        'MAX_TOKENIZED_HISTORY_BLOCK': C.MAX_TOKENIZED_HISTORY_BLOCK,
+        'TOKENIZED_HISTORY_BLOCK_SIZE': C.TOKENIZED_HISTORY_BLOCK_SIZE,
+        'SUMMARY_MIN_TOKEN_PERCENT': C.SUMMARY_MIN_TOKEN_PERCENT,
+        'DEEP_MEMORY_MAX_TOKENS': C.DEEP_MEMORY_MAX_TOKENS,
+        'MAX_TOKENS': C.MAX_TOKENS,
+        'RESERVED_FOR_GENERATION': C.RESERVED_FOR_GENERATION,
+        'SAFE_PROMPT_LIMIT': C.SAFE_PROMPT_LIMIT,
+        'MAX_WORLD_TOKENS': C.MAX_WORLD_TOKENS,
+        'SAFE_PROMPT_LIMIT_COMPUTED': C.MAX_TOKENS - C.RESERVED_FOR_GENERATION,
+    }
+
+
 def get_user_ai_settings(user_id: int):
     return get_ai_settings(None, None, user_id)
 
 def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, force_reload: bool = False):
     """
-    Load AI directive settings from database.
-    
-    Priority:
+    Load AI directive settings.
+
+    Resolution order:
+    1. Remote data server over HTTP (if SETTINGS_REMOTE_URL is configured). This
+       is how the AI server in WSL gets DB-backed settings without SQL access.
+    2. Direct database read (used by the data server itself).
+    3. Hardcoded constants fallback (only if both of the above fail).
+
+    Priority for which settings row:
     1. If settings_id provided, load that specific settings
     2. If user_id provided, load settings based on user's account level
     3. Otherwise, load default settings (ID=1, Basic)
-    
-    If db session is not provided, creates one temporarily.
+
     Settings are cached after first load unless force_reload=True.
     """
-    
+    import sys
+    from config import SETTINGS_REMOTE_URL
+
+    # 1. Remote fetch (AI server in WSL)
+    if SETTINGS_REMOTE_URL:
+        try:
+            return _get_ai_settings_from_remote(settings_id, user_id, force_reload)
+        except Exception as e:
+            print(f"[ai_settings] WARNING: remote settings fetch failed: {e}", file=sys.stderr)
+
+    # 2. Direct database read (data server)
+    try:
+        return _get_ai_settings_from_db(db, settings_id, user_id, force_reload)
+    except Exception as e:
+        print(f"[ai_settings] WARNING: falling back to constants (DB unavailable): {e}", file=sys.stderr)
+
+    # 3. Constants fallback
+    return _default_ai_settings()
+
+
+def _get_ai_settings_from_remote(settings_id: int = None, user_id: int = None, force_reload: bool = False):
+    """Fetch the fully-built settings dict from the data server over HTTP."""
+    import requests
+    from config import SETTINGS_REMOTE_URL
+
+    cache_key = ("remote", settings_id, user_id)
+    if cache_key in _settings_cache and not force_reload:
+        return _settings_cache[cache_key]
+
+    params = {}
+    if settings_id is not None:
+        params["settings_id"] = settings_id
+    if user_id is not None:
+        params["user_id"] = user_id
+
+    url = SETTINGS_REMOTE_URL.rstrip("/") + "/settings/resolve"
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    settings_dict = resp.json()
+
+    # STOP_TOKENS may arrive as a list already; leave as-is.
+    _settings_cache[cache_key] = settings_dict
+    return settings_dict
+
+
+def _get_ai_settings_from_db(db = None, settings_id: int = None, user_id: int = None, force_reload: bool = False):
+
     # Determine which settings to load
     if settings_id is None and user_id is not None:
         # Load user's account level settings

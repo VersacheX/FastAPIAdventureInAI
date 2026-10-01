@@ -14,7 +14,16 @@ from business.models import Base, User
 # Database setup
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base.metadata.create_all(bind=engine)
+
+# Attempt to create tables at import time, but don't hard-fail startup if the
+# database is unreachable or the ODBC driver isn't installed. This lets the AI
+# server (which only needs the DB for auth) boot in environments without SQL
+# Server access. DB-dependent endpoints will still raise when actually used.
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:  # pragma: no cover - environment dependent
+    import sys
+    print(f"[orm_service] WARNING: could not initialize database schema: {e}", file=sys.stderr)
 
 def get_db():
     """

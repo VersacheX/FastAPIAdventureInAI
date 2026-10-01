@@ -162,8 +162,20 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
     except (JWTError, InvalidTokenError):
         raise credentials_exception
-    
-    user = get_user_by_username(db, username)
+
+    # Look the user up in the database. If the database is unreachable (e.g. the
+    # AI/GPU box running without SQL Server access), fall back to a lightweight
+    # user built from the validated token so inference endpoints still work.
+    try:
+        user = get_user_by_username(db, username)
+    except Exception as e:
+        import sys
+        print(f"[auth_service] WARNING: DB unavailable, using token-only user: {e}", file=sys.stderr)
+        stub = User()
+        stub.id = None
+        stub.username = username
+        return stub
+
     if user is None:
         raise credentials_exception
     return user

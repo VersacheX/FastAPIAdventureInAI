@@ -24,3 +24,19 @@ AI_SERVER_URL = os.getenv("AI_SERVER_URL", "http://localhost:9000")
 
 # CORS Origins - Allow all origins on local network for mobile access
 CORS_ORIGINS = ["*"]  # Allow all origins (change to specific IPs in production)
+
+# Story AI model (llama.cpp / GGUF) Configuration
+# The AI server now runs a llama.cpp instruct model (e.g. Qwen2.5 / Hermes 2).
+STORY_MODEL_PATH = os.getenv(
+    "STORY_MODEL_PATH",
+    "/home/dmin/models/Qwen2.5-14B_Uncensored_Instruct-Q5_K_M.gguf"
+)
+STORY_MODEL_CTX = int(os.getenv("STORY_MODEL_CTX", "32768"))
+STORY_MODEL_GPU_LAYERS = int(os.getenv("STORY_MODEL_GPU_LAYERS", "-1"))
+
+# Remote settings source for the AI server.
+# The AI server (e.g. in WSL) cannot reach SQL Server directly. When this URL is
+# set, AI settings are fetched over HTTP from the data server (which CAN read the
+# DB) instead of hitting the database directly. Leave unset on the data server.
+# Example: http://192.168.1.12:8080
+SETTINGS_REMOTE_URL = os.getenv("SETTINGS_REMOTE_URL", "")

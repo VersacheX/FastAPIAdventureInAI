@@ -48,8 +48,7 @@ def _extract_url_from_text(t: str) -> str:
 async def describe_entity_ai(
     query_text: str,
     current_user: User,
-    STORY_TOKENIZER,
-    STORY_GENERATOR,
+    STORY_ENGINE,
     command_prompt: Optional[str] = None,
     meta_data: Optional[str] = None,
     prompt_instruction: Optional[str] = None,
@@ -150,7 +149,7 @@ async def describe_entity_ai(
     )
 
     try:
-        header_tokens = len(STORY_TOKENIZER.encode(header_text))
+        header_tokens = STORY_ENGINE.count_tokens(header_text)
     except Exception:
         header_tokens = int(len(header_text) / 4)
 
@@ -166,8 +165,8 @@ async def describe_entity_ai(
         current_body = prefix + "\n\n---\n\n".join(included) if included else prefix
         candidate_body = current_body + ("\n\n---\n\n" if included else "") + text
         try:
-            current_tokens = len(STORY_TOKENIZER.encode(current_body))
-            candidate_tokens = len(STORY_TOKENIZER.encode(candidate_body))
+            current_tokens = STORY_ENGINE.count_tokens(current_body)
+            candidate_tokens = STORY_ENGINE.count_tokens(candidate_body)
         except Exception:
             current_tokens = int(len(current_body) / 4)
             candidate_tokens = int(len(candidate_body) / 4)
@@ -197,7 +196,6 @@ async def describe_entity_ai(
     raw = await perform_deep_summarize_chunk(
         DeepSummarizeChunkRequest(chunk=chunk, max_tokens=MAX_SUMMARY_TOKENS, previous_summary=None),
         user=current_user,
-        STORY_TOKENIZER=STORY_TOKENIZER,
-        STORY_GENERATOR=STORY_GENERATOR,
+        STORY_ENGINE=STORY_ENGINE,
     )
     return raw
