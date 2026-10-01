@@ -18,7 +18,7 @@ from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 
 from ai.schemas_ai_server import *
 #from ai.services.lookup_ai_service import describe_entity_ai
-from ai.services.ai_api_service import perform_deep_summarize_chunk, perform_count_tokens, flatten_json_prompt, build_story_messages
+from ai.services.ai_api_service import perform_deep_summarize_chunk, perform_count_tokens, flatten_json_prompt, build_story_messages, _clean_generated_text
 from ai.services.ai_modeler_service import load_story_generater_to_app_state, get_model
 from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings, get_user_ai_settings_async
 from shared.services.auth_service import verify_token, get_current_claims
@@ -111,34 +111,6 @@ def is_echo_of_history(text: str, recent_entries) -> bool:
             return True
 
     return False
-
-
-def _clean_generated_text(text: str, stop_tokens, story_splitter: str) -> str:
-    """Strip model artifacts (stop tokens, chapter markers, splitter, prompt
-    echoes) from raw generation output. Pure string work -- no model call -- so
-    it is applied to BOTH fresh generations and repaired output identically.
-    """
-    # Remove lines starting with any stop token
-    for stop_token in stop_tokens or "":
-        if text.strip().startswith(stop_token):
-            text = text.strip()[len(stop_token):].lstrip()
-
-    # Remove chapter markers (e.g. "Chapter 1.2.3:" or "1.2:")
-    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
-    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
-
-    # Remove story splitter if it appears in output
-    if story_splitter and story_splitter in text:
-        text = text.split(story_splitter)[-1].strip()
-
-    # Remove common prompt artifacts
-    text = re.sub(
-        r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$',
-        '', text, flags=re.MULTILINE | re.IGNORECASE,
-    )
-    return text.strip()
 
 
 # Editor directive used by the repair pass. Framing the model as a copy editor
@@ -245,8 +217,8 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     stop_tokens = settings.get("STOP_TOKENS", "")
     recent_story = structured_json.get("RecentStory", [])
 
-    text = await run_in_threadpool(
-        lambda: engine.generate_messages(
+    def _primary_generation():
+        raw = engine.generate_messages(
             messages,
             max_new_tokens=max_new_tokens,
             temperature=0.8,
@@ -255,43 +227,50 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
             frequency_penalty=0.0,
             presence_penalty=0.0,
         )
-    )
-    text = _clean_generated_text(text, stop_tokens, request.story_splitter)
+        return _clean_generated_text(raw, stop_tokens, request.story_splitter)
+
+    text = await run_in_threadpool(_primary_generation)
     fallback_text = text  # best-so-far; never return empty if later steps fail
 
-    if text:
-        if is_broken_prose(text):
-            # Repair the broken prose in a single targeted pass.
-            print("[Prose Gate] Broken prose detected -> running repair pass...")
-            repaired = await _repair_prose(engine, text, max_new_tokens)
-            repaired = _clean_generated_text(repaired, stop_tokens, request.story_splitter)
-            # Only accept the repair if it actually improved things.
-            if repaired and not is_broken_prose(repaired):
-                text = repaired
-            else:
-                print("[Prose Gate] Repair pass did not improve output; keeping original.")
-                text = fallback_text
-        elif is_echo_of_history(text, recent_story):
-            # Echo can't be edited away -> one fresh retry instead.
-            print("[Prose Gate] Verbatim echo detected -> running one fresh retry...")
-            retry = await run_in_threadpool(
-                lambda: engine.generate_messages(
-                    messages,
-                    max_new_tokens=max_new_tokens,
-                    temperature=0.9,
-                    top_p=0.95,
-                    repetition_penalty=1.15,
-                    frequency_penalty=0.0,
-                    presence_penalty=0.0,
-                )
+    if not text:
+        # Empty completion: spend the available second call on a fresh attempt
+        # rather than returning an empty story.
+        print("[Prose Gate] Empty completion -> running one fresh retry...")
+        text = await run_in_threadpool(_primary_generation)
+        fallback_text = text
+    elif is_broken_prose(text):
+        # Repair the broken prose in a single targeted pass.
+        print("[Prose Gate] Broken prose detected -> running repair pass...")
+        repaired = await _repair_prose(engine, text, max_new_tokens)
+        repaired = _clean_generated_text(repaired, stop_tokens, request.story_splitter)
+        # Accept the repair only if it passes BOTH gates: a passage that was
+        # broken may also be an echo, so re-validate against history too.
+        if repaired and not is_broken_prose(repaired) and not is_echo_of_history(repaired, recent_story):
+            text = repaired
+        else:
+            print("[Prose Gate] Repair pass did not improve output; keeping original.")
+            text = fallback_text
+    elif is_echo_of_history(text, recent_story):
+        # Echo can't be edited away -> one fresh retry instead.
+        print("[Prose Gate] Verbatim echo detected -> running one fresh retry...")
+        retry = await run_in_threadpool(
+            lambda: engine.generate_messages(
+                messages,
+                max_new_tokens=max_new_tokens,
+                temperature=0.9,
+                top_p=0.95,
+                repetition_penalty=1.15,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
             )
-            retry = _clean_generated_text(retry, stop_tokens, request.story_splitter)
-            # Keep the retry only if it's non-empty and not itself an echo.
-            if retry and not is_echo_of_history(retry, recent_story):
-                text = retry
-            else:
-                print("[Prose Gate] Retry still echoed/empty; keeping original.")
-                text = fallback_text
+        )
+        retry = _clean_generated_text(retry, stop_tokens, request.story_splitter)
+        # Keep the retry only if it passes BOTH quality gates.
+        if retry and not is_echo_of_history(retry, recent_story) and not is_broken_prose(retry):
+            text = retry
+        else:
+            print("[Prose Gate] Retry still echoed/broken/empty; keeping original.")
+            text = fallback_text
 
     # Guarantee a non-empty return.
     if not text.strip():
@@ -309,9 +288,14 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
 
     settings = await get_user_ai_settings_async(user.id)
 
-    # Build context-aware prompt header
-    prompt_parts = [
-        "Condense this story segment into the most efficient summary possible.\n"
+    # Summarization instructions go in the SYSTEM role. On an instruct model,
+    # mixing the directive and the story into a single flat user turn makes the
+    # model continue/echo the story instead of summarizing it (the old
+    # "<<<SPLIT_MARKER>>>" hack was a workaround for exactly that). Using proper
+    # roles -- rules as system, story as user -- makes it actually summarize.
+    system_prompt = (
+        "You are a summarization engine. Condense the story segment the user "
+        "provides into the most efficient summary possible.\n"
         "Include ONLY:\n"
         "  - Major plot events and outcomes\n"
         "  - Character relationship changes\n"
@@ -324,32 +308,34 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
         "  - Repeated information\n"
         "  - Narrative or analytical commentary\n"
         "Be extremely concise. Use simple, direct language.\n"
-        #"Only state facts. Do NOT review, interpret, or introduce the segment.\n"
-        #"Do NOT use phrases like 'This story segment...', 'In this scene...', or any narrative/analysis.\n"
-        "Write in bullet points or a single direct sentence. No narrative, review, or analysis.\n"
+        "Write in bullet points or a single direct sentence. No narrative, "
+        "review, or analysis. Do NOT continue the story. Do NOT copy sentences "
+        "verbatim from the segment. Output ONLY the summary itself.\n"
         "Do not use any symbols or formatting-just plain text.\n"
-    ]
-    
-    # Add previous summary context if available
-    # if previous_summary:
-    #     prompt_parts.append("\n# Previous Summary (DO NOT REPEAT this):\n")
-    #     prompt_parts.append(previous_summary)
-    #     prompt_parts.append("\n\n# Recent history to Summarize (focus ONLY on what's new):\n")
-    # else:
-    prompt_parts.append("\n# Story Segment:\n")
-    
-    # Build the header to count its tokens
-    header = "".join(prompt_parts)
-    footer = f"\n\n{settings.get('SUMMARY_SPLIT_MARKER', '<<<SPLIT_MARKER>>>')}\n"
-    
-    header_tokens = engine.count_tokens(header)
-    footer_tokens = engine.count_tokens(footer)
-    reserved_tokens = max_tokens  # Reserve space for the summary output
+    )
 
-    # Calculate available budget for chunk content
-    available_tokens = settings.get("SAFE_PROMPT_LIMIT", 3900) - header_tokens - footer_tokens - reserved_tokens
+    # Budget the story content so system prompt + content + generation fit.
+    system_tokens = engine.count_tokens(system_prompt)
+    # ~4 tokens per message of ChatML framing across system/user turns.
+    template_overhead = 4 * 2
+    available_tokens = (
+        settings.get("SAFE_PROMPT_LIMIT", 3900)
+        - system_tokens
+        - template_overhead
+        - max_tokens
+    )
 
-    # Add chunk entries until we run out of budget
+    # Optionally give the model the running summary as context so it doesn't
+    # repeat already-captured events.
+    context_prefix = ""
+    if previous_summary:
+        context_prefix = (
+            "# Summary so far (already captured, do NOT repeat):\n"
+            f"{previous_summary.strip()}\n\n"
+        )
+        available_tokens -= engine.count_tokens(context_prefix)
+
+    # Add chunk entries until we run out of budget.
     chunk_text_parts = []
     for entry in chunk:
         entry_text = entry.strip() + "\n"
@@ -359,9 +345,8 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
             chunk_text_parts.append(entry_text)
             available_tokens -= entry_tokens
         else:
-            # If we can't fit the whole entry, truncate it
+            # If we can't fit the whole entry, truncate it.
             if len(chunk_text_parts) == 0:
-                # At least include a truncated version of the first entry
                 words = entry.split()
                 truncated = ""
                 for word in words:
@@ -375,38 +360,42 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
                     chunk_text_parts.append(truncated + "...\n")
             break
 
-    prompt = header + "".join(chunk_text_parts) + footer
+    user_content = (
+        f"{context_prefix}"
+        "# Story Segment to summarize:\n"
+        f"{''.join(chunk_text_parts).strip()}"
+    )
 
-    # Log the token count
-    final_tokens = engine.count_tokens(prompt)
-    # print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3900)})")
-    # print(f"[Summarize Token Budget] Chunk entries included: {len(chunk_text_parts)}/{len(chunk)}")
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
 
-    # print("\n" + "="*80)
-    # print("SUMMARIZE_CHUNK - AI PROMPT:")
-    # print("="*80)
-    # print(prompt)
-    # print("="*80 + "\n")
+    final_tokens = sum(engine.count_tokens(m["content"]) for m in messages)
+    print(f"[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3900)})")
 
-    # Single attempt - accept whatever concise summary the AI produces
+    # Single attempt - accept whatever concise summary the AI produces.
     summary_text = await run_in_threadpool(
-        lambda: engine.generate(
-            prompt,
+        lambda: engine.generate_messages(
+            messages,
             max_new_tokens=max_tokens,
             temperature=0.2,
             top_p=0.90,
-            repetition_penalty=1.1
+            repetition_penalty=1.1,
         )
     )
 
-    # Strip everything before the marker
-    if settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>") in summary_text:
-        summary_text = summary_text.split(settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>"))[-1]
+    # Legacy split marker: strip it if an older prompt/model still emits it.
+    marker = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
+    if marker in summary_text:
+        summary_text = summary_text.split(marker)[-1]
 
+    # Shared artifact cleanup (stop tokens, chapter markers, prompt echoes).
+    summary_text = _clean_generated_text(summary_text, settings.get("STOP_TOKENS", ""), None)
     summary_text = summary_text.strip()
 
     print("\n" + "="*80)
-    print("SUMMARIZE_CHUNK - AI RESPONSE (after split marker removal):")
+    print("SUMMARIZE_CHUNK - AI RESPONSE:")
     print("="*80)
     print(summary_text)
     print(f"Token count: {engine.count_tokens(summary_text)}")

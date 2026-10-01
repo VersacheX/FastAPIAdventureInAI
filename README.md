@@ -262,7 +262,7 @@ Model-related settings (all read from env, with defaults in `config.py`):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `STORY_MODEL_PATH` | `/home/dmin/models/Qwen2.5-14B_Uncensored_Instruct-Q5_K_M.gguf` | Absolute path to the GGUF file |
-| `STORY_MODEL_CTX` | `32768` | Context window size (tokens) |
+| `STORY_MODEL_CTX` | `16384` | Context window size (tokens) |
 | `STORY_MODEL_GPU_LAYERS` | `-1` | GPU layers to offload (`-1` = all) |
 
 The engine (`ai/services/ai_modeler_service.py`) forces `chat_format="chatml"` so instruct models are prompted with the correct template.
@@ -365,7 +365,7 @@ AI_SERVER_URL  = "http://localhost:9000"
 
 # AI model (AI server)
 STORY_MODEL_PATH       = "/home/dmin/models/Qwen2.5-14B_Uncensored_Instruct-Q5_K_M.gguf"
-STORY_MODEL_CTX        = 32768
+STORY_MODEL_CTX        = 16384
 STORY_MODEL_GPU_LAYERS = -1              # -1 = offload all layers to GPU
 
 # Remote settings relay (AI server in WSL). Leave empty on the data server.

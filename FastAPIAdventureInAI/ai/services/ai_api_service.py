@@ -1,6 +1,7 @@
 """
 AI helper functions for story generation and history management.
 """
+import re
 from fastapi import Request
 #from ai.ai_client_requests import ai_summarize_chunk, ai_prime_narrator, ai_generate_story
 from ai.schemas_ai_server import *
@@ -10,7 +11,34 @@ from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 from shared.helpers.memory_helper import get_recent_memories
 from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
 
-    
+
+def _clean_generated_text(text: str, stop_tokens=None, story_splitter: str = None) -> str:
+    """Strip model artifacts (stop tokens, chapter markers, splitter, prompt
+    echoes) from raw generation output. Pure string work -- no model call -- so
+    it can be applied to any generation (story, summary, repair) identically.
+    """
+    # Remove lines starting with any stop token
+    for stop_token in stop_tokens or "":
+        if text.strip().startswith(stop_token):
+            text = text.strip()[len(stop_token):].lstrip()
+
+    # Remove chapter markers (e.g. "Chapter 1.2.3:" or "1.2:")
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
+
+    # Remove story splitter if it appears in output
+    if story_splitter and story_splitter in text:
+        text = text.split(story_splitter)[-1].strip()
+
+    # Remove common prompt artifacts
+    text = re.sub(
+        r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$',
+        '', text, flags=re.MULTILINE | re.IGNORECASE,
+    )
+    return text.strip()
+
 def flatten_json_prompt(json_data, settings, STORY_ENGINE):
     """Build optimized prompt from structured game data with token budget enforcement.
 
@@ -321,23 +349,58 @@ async def perform_count_tokens(request: Request, STORY_ENGINE):
 
 # THIS CAN STAY
 async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user: User, STORY_ENGINE):
-    prompt = request.chunk
+    chunk = request.chunk
     max_tokens = request.max_tokens
-    #previous_summary = request.previous_summary
+    previous_summary = request.previous_summary
 
     settings = get_user_ai_settings(user.id)
     SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
     SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
 
-    prompt += f"\n{SUMMARY_SPLIT_MARKER}"
-    # Log the token count
-    final_tokens = STORY_ENGINE.count_tokens(prompt)
-    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
+    # Deep (ancient) memory compression. Like the chunk summarizer, this must use
+    # proper chat roles: the directive goes in the SYSTEM turn and the chapter
+    # summaries go in the USER turn. Previously the raw chunk was sent with no
+    # instructions at all (just a trailing marker), so the instruct model simply
+    # echoed the text back instead of compressing it.
+    system_prompt = (
+        "You are a long-term memory compressor. You are given one or more "
+        "chapter summaries describing ancient story history. Merge them into a "
+        "single, ultra-compressed record of ONLY the most important, lasting "
+        "facts: major plot outcomes, permanent world/state changes, key "
+        "character arcs and relationships, and unresolved threads.\n"
+        "Rules:\n"
+        "  - Preserve continuity across ALL provided history.\n"
+        "  - Be extremely terse; drop anything minor or transient.\n"
+        "  - Do NOT continue the story and do NOT copy sentences verbatim.\n"
+        "  - Output ONLY the merged summary as plain text, no formatting.\n"
+    )
+
+    # Include the existing deep-memory summary so a second compression does not
+    # discard previously retained ancient history -- it gets merged forward.
+    user_parts = []
+    if previous_summary:
+        user_parts.append(
+            "# Existing ancient-history summary (KEEP these facts, merge forward):\n"
+            f"{previous_summary.strip()}\n"
+        )
+    user_parts.append(
+        "# New chapter summaries to merge in:\n"
+        f"{chunk.strip()}"
+    )
+    user_content = "\n".join(user_parts)
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    final_tokens = sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
+    print(f"\n[Deep Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
 
     # Single attempt - accept whatever concise summary the AI produces
     summary_text = await run_in_threadpool(
-        lambda: STORY_ENGINE.generate(
-            prompt,
+        lambda: STORY_ENGINE.generate_messages(
+            messages,
             max_new_tokens=max_tokens,
             temperature=0.5,
             top_p=0.90,
@@ -345,10 +408,12 @@ async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user:
         )
     )
 
-    # Strip everything before the marker
+    # Legacy split marker: strip it if present
     if SUMMARY_SPLIT_MARKER in summary_text:
         summary_text = summary_text.split(SUMMARY_SPLIT_MARKER)[-1]
 
+    # Shared artifact cleanup: stop tokens, chapter markers, prompt echoes.
+    summary_text = _clean_generated_text(summary_text, settings.get("STOP_TOKENS", ""))
     summary_text = summary_text.strip()
 
     print("\n" + "="*80)
