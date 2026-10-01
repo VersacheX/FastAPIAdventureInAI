@@ -12,6 +12,7 @@ StoryEngine; call sites that previously unpacked (generator, tokenizer) should
 use the engine methods instead.
 """
 import sys
+import threading
 
 from llama_cpp import Llama
 from fastapi import Request
@@ -28,13 +29,20 @@ class StoryEngine:
 
     def __init__(self, llm: Llama):
         self.llm = llm
+        # llama_cpp.Llama is NOT thread-safe: it keeps a single shared KV cache
+        # and token-position counter. Concurrent calls (overlapping story
+        # requests, or a token-count call racing a generation) corrupt the
+        # cache and crash with "inconsistent sequence positions" /
+        # "llama_decode returned -1". This lock serialises ALL model access.
+        self._lock = threading.Lock()
 
     # ?? Tokenization ?????????????????????????????????????????????
     def encode(self, text: str, add_special_tokens: bool = False):
         """Return the token ids for a piece of text (list of ints)."""
         if text is None:
             text = ""
-        return self.llm.tokenize(text.encode("utf-8"), add_bos=add_special_tokens)
+        with self._lock:
+            return self.llm.tokenize(text.encode("utf-8"), add_bos=add_special_tokens)
 
     def count_tokens(self, text: str) -> int:
         return len(self.encode(text))
@@ -71,16 +79,17 @@ class StoryEngine:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        output = self.llm.create_chat_completion(
-            messages=messages,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repeat_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            stop=stop or [],
-        )
+        with self._lock:
+            output = self.llm.create_chat_completion(
+                messages=messages,
+                max_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                repeat_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stop=stop or [],
+            )
         return output["choices"][0]["message"]["content"]
 
     def generate_messages(
@@ -100,16 +109,17 @@ class StoryEngine:
         assistant's PRIOR turn stops the model from echoing it verbatim and
         makes it produce the NEXT beat instead.
         """
-        output = self.llm.create_chat_completion(
-            messages=messages,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repeat_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            stop=stop or [],
-        )
+        with self._lock:
+            output = self.llm.create_chat_completion(
+                messages=messages,
+                max_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                repeat_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stop=stop or [],
+            )
         return output["choices"][0]["message"]["content"]
 
 

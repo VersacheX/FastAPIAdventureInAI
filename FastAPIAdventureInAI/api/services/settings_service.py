@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from business.models import AIDirectiveSettings
 from business.dtos import AIDirectiveSettingsDTO
 from shared.services.orm_service import get_db
-from shared.helpers.ai_settings import get_ai_settings
+from shared.helpers.ai_settings import get_ai_settings, invalidate_settings_cache
 
 
 async def perform_resolve_settings(
@@ -56,4 +56,10 @@ async def perform_update_settings(settings_id: int, updates: dict, db: Session =
 
     db.commit()
     db.refresh(settings)
+
+    # The row changed, so any cached settings are now stale. Clear the cache so
+    # the next read (including the AI server's remote /settings/resolve fetch)
+    # rebuilds from the updated row.
+    invalidate_settings_cache()
+
     return settings

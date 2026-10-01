@@ -45,7 +45,7 @@ def build_story_messages(json_data, settings, STORY_ENGINE, system_prompt=None):
     pattern to reproduce.
     """
     context_block, recent_story_block, action_block, stats = _build_prompt_blocks(
-        json_data, settings, STORY_ENGINE
+        json_data, settings, STORY_ENGINE, system_prompt=system_prompt
     )
 
     messages = []
@@ -64,18 +64,22 @@ def build_story_messages(json_data, settings, STORY_ENGINE, system_prompt=None):
 
     final_tokens = sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
     print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3901)})")
-    print(f"[Token Budget] MEMORIES: {stats['block_tokens']} ACTIONS: {stats['action_tokens']} BASE: {stats['base_tokens']} RECENT HISTORY: {stats['entry_tokens']}")
+    print(f"[Token Budget] MEMORIES: {stats['block_tokens']} ACTIONS: {stats['action_tokens']} BASE: {stats['base_tokens']} RECENT HISTORY: {stats['entry_tokens']} SYSTEM: {stats['system_tokens']} TEMPLATE: {stats['template_overhead']}")
 
     return messages
 
 
-def _build_prompt_blocks(json_data, settings, STORY_ENGINE):
+def _build_prompt_blocks(json_data, settings, STORY_ENGINE, system_prompt=None):
     """Shared budget-aware builder returning the prompt in separate blocks.
 
     Returns (context_block, recent_story_block, action_block, stats) where
     context_block holds universe/player/rating + ancient & compressed history,
     recent_story_block holds the uncompressed recent entries (no header), and
     action_block holds the player's action plus the continuation directive.
+
+    The budget reserves tokens for the system prompt (narrator directives) and
+    an estimate of the chat template's per-message overhead so the final rendered
+    prompt does not overflow the context window.
     """
     recent_story = json_data.get("RecentStory", [])
     tokenized_history = json_data.get("TokenizedHistory", [])
@@ -92,6 +96,15 @@ def _build_prompt_blocks(json_data, settings, STORY_ENGINE):
 
     base_tokens = STORY_ENGINE.count_tokens(context_block)
     tokens_used = base_tokens
+
+    # Reserve budget for the system prompt plus chat-template framing overhead.
+    # Each message rendered by the chat template adds role/delimiter tokens
+    # (roughly 4 tokens per message for ChatML). We account for up to 4 messages
+    # (system/user/assistant/user) so the final rendered prompt stays within the
+    # safe limit.
+    system_tokens = STORY_ENGINE.count_tokens(system_prompt) if system_prompt else 0
+    template_overhead = 4 * 4
+    tokens_used += system_tokens + template_overhead
 
     # Build the action / continuation block.
     current_action = json_data['CurrentAction'].strip()
@@ -166,6 +179,8 @@ def _build_prompt_blocks(json_data, settings, STORY_ENGINE):
 
     stats = {
         "base_tokens": base_tokens,
+        "system_tokens": system_tokens,
+        "template_overhead": template_overhead,
         "action_tokens": action_tokens,
         "block_tokens": total_block_tokens,
         "entry_tokens": total_entry_tokens,

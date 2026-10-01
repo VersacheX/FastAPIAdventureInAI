@@ -48,6 +48,18 @@ def _default_ai_settings():
 def get_user_ai_settings(user_id: int):
     return get_ai_settings(None, None, user_id)
 
+
+def invalidate_settings_cache():
+    """Clear the in-process AI settings cache.
+
+    Must be called after a settings row is updated so subsequent reads (and the
+    AI server's remote fetches) pick up the new values instead of stale cached
+    ones.
+    """
+    global _settings_cache
+    _settings_cache.clear()
+
+
 def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, force_reload: bool = False):
     """
     Load AI directive settings.

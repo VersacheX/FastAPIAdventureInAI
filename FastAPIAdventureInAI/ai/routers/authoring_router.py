@@ -247,7 +247,7 @@ def _validate_task_output(data: Dict[str, Any], request: TaskAuthoringRequest) -
                     # Check if npc_id exists in known list
                     if "npc_id" in params:
                         npc_id = params["npc_id"]
-                        if npc_id not in request.known_npc_ids and npc_id not in ["technique", "tech", "magic", "faith", "skill", "pending_character"]:
+                        if npc_id not in (request.known_npc_ids or []) and npc_id not in ["technique", "tech", "magic", "faith", "skill", "pending_character"]:
                             warnings.append(f"Task {task.get('task_id', i)} references unknown npc_id: {npc_id}")
     
     return warnings

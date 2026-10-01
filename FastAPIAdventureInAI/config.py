@@ -34,6 +34,15 @@ STORY_MODEL_PATH = os.getenv(
 STORY_MODEL_CTX = int(os.getenv("STORY_MODEL_CTX", "32768"))
 STORY_MODEL_GPU_LAYERS = int(os.getenv("STORY_MODEL_GPU_LAYERS", "-1"))
 
+# Authoring AI model (llama.cpp / GGUF) Configuration
+# Used by the separate authoring server (port 9100) for structured story
+# authoring. Defaults to the same model as the story engine so the server can
+# start out of the box; override via environment variables to use a different
+# model or offload settings.
+AUTHORING_MODEL_PATH = os.getenv("AUTHORING_MODEL_PATH", STORY_MODEL_PATH)
+AUTHORING_MODEL_CTX = int(os.getenv("AUTHORING_MODEL_CTX", str(STORY_MODEL_CTX)))
+AUTHORING_MODEL_GPU_LAYERS = int(os.getenv("AUTHORING_MODEL_GPU_LAYERS", str(STORY_MODEL_GPU_LAYERS)))
+
 # Remote settings source for the AI server.
 # The AI server (e.g. in WSL) cannot reach SQL Server directly. When this URL is
 # set, AI settings are fetched over HTTP from the data server (which CAN read the
