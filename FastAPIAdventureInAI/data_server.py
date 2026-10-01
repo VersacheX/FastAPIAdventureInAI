@@ -6,8 +6,14 @@ from config import CORS_ORIGINS
 
 # Import routers
 from api.routers import auth_router, users_router, game_ratings_router, worlds_router, deep_memory_router, tokenized_history_router, history_router, saved_games_router, settings_router
+from shared.services.orm_service import init_db_schema
 
 app = FastAPI()
+
+# The data server OWNS the database. Initialize the schema at startup so broken
+# connectivity, credentials, or driver problems fail loudly here rather than
+# surfacing later as per-request errors. DB-less inference servers skip this.
+init_db_schema()
 
 # CORS middleware
 app.add_middleware(

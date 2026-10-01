@@ -54,6 +54,19 @@ def get_user_ai_settings(user_id: int):
     return get_ai_settings(None, None, user_id)
 
 
+async def get_user_ai_settings_async(user_id: int):
+    """Async wrapper around get_user_ai_settings for use in async routes.
+
+    Settings resolution can perform a synchronous, blocking HTTP call to the
+    data server (remote mode) plus a potential DB fallback. Running that inline
+    in an async endpoint would block the event loop for up to the request
+    timeout and stall unrelated inference requests, so offload it to a worker
+    thread.
+    """
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(get_user_ai_settings, user_id)
+
+
 def invalidate_settings_cache():
     """Clear the in-process AI settings cache.
 

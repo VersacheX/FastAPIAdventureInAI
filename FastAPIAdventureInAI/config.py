@@ -31,8 +31,14 @@ STORY_MODEL_PATH = os.getenv(
     "STORY_MODEL_PATH",
     "/home/dmin/models/Qwen2.5-14B_Uncensored_Instruct-Q5_K_M.gguf"
 )
-STORY_MODEL_CTX = int(os.getenv("STORY_MODEL_CTX", "32768"))
+STORY_MODEL_CTX = int(os.getenv("STORY_MODEL_CTX", "16384"))
 STORY_MODEL_GPU_LAYERS = int(os.getenv("STORY_MODEL_GPU_LAYERS", "-1"))
+# Prompt-ingestion batch size. Bigger = faster prompt eval on GPU (more VRAM).
+STORY_MODEL_BATCH = int(os.getenv("STORY_MODEL_BATCH", "512"))
+# Flash attention: smaller KV cache + faster attention on CUDA. Off by default
+# to match the known-good reference loader; enable with "1" if your build
+# supports it (it frees VRAM and can speed attention).
+STORY_MODEL_FLASH_ATTN = os.getenv("STORY_MODEL_FLASH_ATTN", "0") == "1"
 
 # Authoring AI model (llama.cpp / GGUF) Configuration
 # Used by the separate authoring server (port 9100) for structured story

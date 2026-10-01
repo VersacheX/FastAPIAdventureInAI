@@ -20,7 +20,7 @@ from ai.schemas_ai_server import *
 #from ai.services.lookup_ai_service import describe_entity_ai
 from ai.services.ai_api_service import perform_deep_summarize_chunk, perform_count_tokens, flatten_json_prompt, build_story_messages
 from ai.services.ai_modeler_service import load_story_generater_to_app_state, get_model
-from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
+from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings, get_user_ai_settings_async
 from shared.services.auth_service import verify_token, get_current_claims
 from shared.services.orm_service import get_db
 
@@ -113,6 +113,66 @@ def is_echo_of_history(text: str, recent_entries) -> bool:
     return False
 
 
+def _clean_generated_text(text: str, stop_tokens, story_splitter: str) -> str:
+    """Strip model artifacts (stop tokens, chapter markers, splitter, prompt
+    echoes) from raw generation output. Pure string work -- no model call -- so
+    it is applied to BOTH fresh generations and repaired output identically.
+    """
+    # Remove lines starting with any stop token
+    for stop_token in stop_tokens or "":
+        if text.strip().startswith(stop_token):
+            text = text.strip()[len(stop_token):].lstrip()
+
+    # Remove chapter markers (e.g. "Chapter 1.2.3:" or "1.2:")
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
+
+    # Remove story splitter if it appears in output
+    if story_splitter and story_splitter in text:
+        text = text.split(story_splitter)[-1].strip()
+
+    # Remove common prompt artifacts
+    text = re.sub(
+        r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$',
+        '', text, flags=re.MULTILINE | re.IGNORECASE,
+    )
+    return text.strip()
+
+
+# Editor directive used by the repair pass. Framing the model as a copy editor
+# with an explicit "preserve events, fix only the language" instruction makes a
+# single repair generation far more reliable at fixing broken/telegraphic prose
+# than a blind reroll of the same request.
+_REPAIR_SYSTEM_PROMPT = (
+    "You are a line editor. Rewrite the passage below in fluent, natural English. "
+    "Preserve the events, characters, tone, and meaning EXACTLY -- do not add, "
+    "remove, or invent anything. Fix only grammar, dropped articles/pronouns, and "
+    "run-on sentences. Return ONLY the rewritten narration with no commentary, "
+    "labels, or quotation marks."
+)
+
+
+async def _repair_prose(engine, text: str, max_new_tokens: int) -> str:
+    """Run a single repair generation that rewrites broken prose cleanly.
+
+    This is a full model call (same ~per-token cost as a retry), but a targeted
+    "rewrite this fluently" task succeeds in one shot far more often than hoping
+    a fresh random generation comes out clean -- so the effort is not wasted.
+    """
+    return await run_in_threadpool(
+        lambda: engine.generate(
+            text,
+            max_new_tokens=max_new_tokens,
+            temperature=0.4,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            system_prompt=_REPAIR_SYSTEM_PROMPT,
+        )
+    )
+
+
 @router.post("/prime_narrator/")
 async def prime_narrator(db=Depends(get_db), user=Depends(get_current_claims), engine = Depends(get_model)):
     #settings = get_user_ai_settings(user.id)
@@ -128,7 +188,7 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     # Accepts game data directly and builds structured JSON before generating story.
     # This endpoint is designed for React clients to call directly.
     # """
-    settings = get_user_ai_settings(user.id)
+    settings = await get_user_ai_settings_async(user.id)
     # Set random seed for reproducibility
     random.seed(random.randint(0, 2**32 - 1))
 
@@ -171,61 +231,73 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     # print(messages)
     # print("="*80 + "\n")
 
-    # Cap retries low: StoryEngine serialises ALL model access, so a single
-    # request looping many full generations would monopolise the GPU and block
-    # every other inference request. A false-positive prose/echo rejection must
-    # not stall the server, so we accept whatever we have after a few attempts.
-    max_retries = 4
-    text = ""
-    for attempt in range(1, max_retries + 1):
-        text = await run_in_threadpool(
-            lambda: engine.generate_messages(
-                messages,
-                max_new_tokens=settings.get("RESERVED_FOR_GENERATION", 150),
-                temperature=0.8,
-                top_p=0.95,
-                repetition_penalty=1.1,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
-            )
+    # Hybrid quality gate (bounded to 2 model calls total). At ~5 tok/s every
+    # generation is expensive, so instead of blindly rerolling we spend the
+    # second call intelligently based on WHAT was wrong:
+    #   - broken prose  -> REPAIR pass: feed the text back to be rewritten
+    #                      cleanly (targeted, high one-shot success rate).
+    #   - echo of past  -> fresh RETRY: rewording an echo doesn't help, so a new
+    #                      generation is the right fix.
+    #   - clean         -> accept immediately (one call, ~35s).
+    # The first usable output is always kept as a fallback so no generation is
+    # ever wasted.
+    max_new_tokens = settings.get("RESERVED_FOR_GENERATION", 150)
+    stop_tokens = settings.get("STOP_TOKENS", "")
+    recent_story = structured_json.get("RecentStory", [])
+
+    text = await run_in_threadpool(
+        lambda: engine.generate_messages(
+            messages,
+            max_new_tokens=max_new_tokens,
+            temperature=0.8,
+            top_p=0.95,
+            repetition_penalty=1.1,
+            frequency_penalty=0.0,
+            presence_penalty=0.0,
         )
+    )
+    text = _clean_generated_text(text, stop_tokens, request.story_splitter)
+    fallback_text = text  # best-so-far; never return empty if later steps fail
 
-        # Remove lines starting with any stop token
-        for stop_token in settings.get("STOP_TOKENS", ""):
-            if text.strip().startswith(stop_token):
-                text = text.strip()[len(stop_token):].lstrip()
+    if text:
+        if is_broken_prose(text):
+            # Repair the broken prose in a single targeted pass.
+            print("[Prose Gate] Broken prose detected -> running repair pass...")
+            repaired = await _repair_prose(engine, text, max_new_tokens)
+            repaired = _clean_generated_text(repaired, stop_tokens, request.story_splitter)
+            # Only accept the repair if it actually improved things.
+            if repaired and not is_broken_prose(repaired):
+                text = repaired
+            else:
+                print("[Prose Gate] Repair pass did not improve output; keeping original.")
+                text = fallback_text
+        elif is_echo_of_history(text, recent_story):
+            # Echo can't be edited away -> one fresh retry instead.
+            print("[Prose Gate] Verbatim echo detected -> running one fresh retry...")
+            retry = await run_in_threadpool(
+                lambda: engine.generate_messages(
+                    messages,
+                    max_new_tokens=max_new_tokens,
+                    temperature=0.9,
+                    top_p=0.95,
+                    repetition_penalty=1.15,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
+                )
+            )
+            retry = _clean_generated_text(retry, stop_tokens, request.story_splitter)
+            # Keep the retry only if it's non-empty and not itself an echo.
+            if retry and not is_echo_of_history(retry, recent_story):
+                text = retry
+            else:
+                print("[Prose Gate] Retry still echoed/empty; keeping original.")
+                text = fallback_text
 
-        # Remove entire lines containing chapter markers (e.g., "Chapter 1.2.3:" or "1.2.5:" or "1.2:")
-        # Remove lines like "Chapter 1.2.3:" or "Chapter 1.2:"
-        text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
-        # Remove lines like "1.2.5:" or "1.2:" at the start of a line
-        text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
-        # Remove the pattern inline if it appears at the start of the text
-        text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
+    # Guarantee a non-empty return.
+    if not text.strip():
+        text = fallback_text
 
-        # Remove story splitter if it appears in output
-        if request.story_splitter in text:
-            text = text.split(request.story_splitter)[-1].strip()
-
-        # Remove common prompt artifacts
-        text = re.sub(r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
-        text = text.strip()
-
-        if len(text.strip()) > 0:
-            # Reject bad output so it never gets saved to history and
-            # contaminates later generations. On the final attempt, accept
-            # whatever we have to guarantee the endpoint returns something.
-            if attempt < max_retries:
-                if is_broken_prose(text):
-                    print(f"[Prose Gate] Rejected broken output on attempt {attempt}, retrying...")
-                    continue
-                if is_echo_of_history(text, structured_json.get("RecentStory", [])):
-                    print(f"[Prose Gate] Rejected verbatim echo of history on attempt {attempt}, retrying...")
-                    continue
-            break
-
-        print(f"OUTPUT:{text}")
+    print(f"OUTPUT:{text}")
 
     return {"story": text.strip()}
 
@@ -235,7 +307,7 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
 
-    settings = get_user_ai_settings(user.id)
+    settings = await get_user_ai_settings_async(user.id)
 
     # Build context-aware prompt header
     prompt_parts = [

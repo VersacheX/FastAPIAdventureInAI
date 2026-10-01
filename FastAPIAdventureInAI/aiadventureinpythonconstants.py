@@ -103,7 +103,7 @@ TOKENIZED_HISTORY_BLOCK_SIZE = 230  # Chapter Section Token Size (200 tokens per
 DEEP_MEMORY_MAX_TOKENS = 300        # Maximum tokens for ultra-compressed ancient history (deep memory)
 SUMMARY_MIN_TOKEN_PERCENT = 0.5     # Ch Sec Min Token %
 MAX_TOKENS = 4096                   # MythoMax limit
-RESERVED_FOR_GENERATION = 180       # AI Story Token return limit
+RESERVED_FOR_GENERATION = 175       # AI Story Token return limit
 SAFE_PROMPT_LIMIT = MAX_TOKENS - RESERVED_FOR_GENERATION
 MAX_WORLD_TOKENS = 1000             # Maximum tokens allowed for world (name + preface + world_tokens)
 

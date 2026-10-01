@@ -21,6 +21,8 @@ from config import (
     STORY_MODEL_PATH,
     STORY_MODEL_CTX,
     STORY_MODEL_GPU_LAYERS,
+    STORY_MODEL_BATCH,
+    STORY_MODEL_FLASH_ATTN,
 )
 
 
@@ -125,10 +127,20 @@ class StoryEngine:
 
 def silent_model_load() -> StoryEngine:
     print(f"[STORY ENGINE] Loading model from {STORY_MODEL_PATH}...", file=sys.stderr)
+    print(
+        f"[STORY ENGINE] n_ctx={STORY_MODEL_CTX} n_gpu_layers={STORY_MODEL_GPU_LAYERS} "
+        f"n_batch={STORY_MODEL_BATCH} flash_attn={STORY_MODEL_FLASH_ATTN}",
+        file=sys.stderr,
+    )
     llm = Llama(
         model_path=STORY_MODEL_PATH,
         n_ctx=STORY_MODEL_CTX,
         n_gpu_layers=STORY_MODEL_GPU_LAYERS,
+        # Larger logical batch speeds up prompt ingestion (prompt eval) on GPU.
+        n_batch=STORY_MODEL_BATCH,
+        # Flash attention shrinks the KV cache and speeds attention on CUDA,
+        # freeing VRAM so more layers stay on the GPU.
+        flash_attn=STORY_MODEL_FLASH_ATTN,
         seed=0,
         # Qwen2.5 uses ChatML. Force it explicitly: "uncensored" merges often
         # ship with stripped/broken chat_template metadata, which makes

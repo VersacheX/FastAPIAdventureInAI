@@ -16,8 +16,8 @@ from ai.services.authoring_modeler_service import (
     get_authoring_model,
     generate_authoring_json,
 )
-from shared.helpers.ai_settings import get_user_ai_settings
-from shared.services.auth_service import get_current_user
+from shared.helpers.ai_settings import get_user_ai_settings, get_user_ai_settings_async
+from shared.services.auth_service import get_current_claims
 
 
 router = APIRouter(tags=["authoring"])
@@ -256,10 +256,10 @@ def _validate_task_output(data: Dict[str, Any], request: TaskAuthoringRequest) -
 @router.post("/authoring/populate_primary_story_settings/")
 async def populate_primary_story_settings(
     request: PopulatePrimaryStorySettingsRequest,
-    user=Depends(get_current_user),
+    user=Depends(get_current_claims),
     llm: Llama = Depends(get_authoring_model),
 ):
-    settings = get_user_ai_settings(user.id)
+    settings = await get_user_ai_settings_async(user.id)
 
     max_new_tokens = request.max_new_tokens or settings.get("RESERVED_FOR_GENERATION", 900)
 
@@ -316,7 +316,7 @@ async def populate_primary_story_settings(
 @router.post("/authoring/task_authoring/", response_model=TaskAuthoringResponse)
 async def task_authoring(
     request: TaskAuthoringRequest,
-    user=Depends(get_current_user),
+    user=Depends(get_current_claims),
     llm: Llama = Depends(get_authoring_model),
 ):
     """
@@ -329,7 +329,7 @@ async def task_authoring(
     if request.mode not in ["plan", "npcs", "dialog", "tasks"]:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
 
-    settings = get_user_ai_settings(user.id)
+    settings = await get_user_ai_settings_async(user.id)
 
     # Adjust max_new_tokens based on mode
     if request.max_new_tokens:
