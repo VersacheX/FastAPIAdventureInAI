@@ -345,7 +345,11 @@ async def perform_count_tokens(request: Request, STORY_ENGINE):
     body = await request.json()
     text = body.get("text", "")
 
-    return {"token_count": STORY_ENGINE.count_tokens(text)}
+    # count_tokens acquires the engine's synchronous model lock. Run it in a
+    # worker thread so a concurrent generation holding that lock cannot block
+    # the async event loop for the full generation duration.
+    token_count = await run_in_threadpool(STORY_ENGINE.count_tokens, text)
+    return {"token_count": token_count}
 
 # THIS CAN STAY
 async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user: User, STORY_ENGINE):
