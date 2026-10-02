@@ -1,15 +1,49 @@
 import requests
 import jwt
 import os
+from datetime import timedelta
 from config import SECRET_KEY, ALGORITHM, AI_SERVER_URL
 from business.converters import serialize_for_json
 
 
+# Server-to-server tokens are minted fresh per request and only need to survive
+# the lifetime of a single AI call. A short expiry bounds the replay window if a
+# token is captured on the plain-HTTP LAN link.
+_AI_TOKEN_EXPIRE = timedelta(minutes=5)
+
+
 def _get_ai_auth_headers(username: str = None):
-    """Generate auth headers for AI server requests"""
+    """Generate auth headers for AI server requests.
+
+    The AI server resolves per-user settings from the token's user_id (it runs
+    DB-less in WSL and cannot look the user up itself). So for real user calls we
+    resolve the id here, on the data server, and embed it in the token. Without
+    this, summarization/inference routes would silently fall back to the Basic
+    (default) settings row instead of the user's account level.
+    """
     # Always create a token - use provided username or 'system' for internal calls
     user = username if username else "system"
-    token = jwt.encode({"sub": user}, SECRET_KEY, algorithm=ALGORITHM)
+    claims = {"sub": user}
+
+    if username:
+        try:
+            from shared.services.orm_service import SessionLocal
+            from shared.services.auth_service import get_user_by_username
+            db = SessionLocal()
+            try:
+                db_user = get_user_by_username(db, username)
+                if db_user is not None and db_user.id is not None:
+                    claims["user_id"] = db_user.id
+            finally:
+                db.close()
+        except Exception as e:
+            # Non-fatal: fall back to a sub-only token (Basic settings).
+            print(f"[ai_client_requests] WARNING: could not resolve user_id for '{username}': {e}")
+
+    # Mint through the shared helper so the token carries an exp claim and cannot
+    # be replayed indefinitely as this user.
+    from shared.services.auth_service import create_access_token
+    token = create_access_token(claims, expires_delta=_AI_TOKEN_EXPIRE)
     return {"Authorization": f"Bearer {token}"}
 
 # def ai_prime_narrator(username: str = None):

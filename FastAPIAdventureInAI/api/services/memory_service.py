@@ -90,28 +90,21 @@ def compress_to_deep_memory(
     Returns:
         Tuple of (deep_summary, token_count)
     """    
-    prompt = (
-        "Compress these story summaries into a single ultra-concise deep memory.\n"
-        "Extract ONLY the most critical information:\n"
-        "  - Major plot arcs and their resolutions\n"
-        "  - Significant character introductions and relationship shifts\n"
-        "  - World-changing events or discoveries\n"
-        "  - Ongoing missions or tasks\n"
-        "Remove ALL minor details, scene descriptions, and redundant information.\n"
-        "Retain chronological order.\n"
-        "# Summaries to Compress:\n\n"
-        + "\n\n---\n\n".join(summaries)
-    )
-    
+    # The /deep_summarize_chunk/ endpoint now owns the compression directive
+    # (as a chat system prompt), so we only send the raw summaries as content.
+    # The existing deep-memory summary, when present, is already included at the
+    # front of `summaries` by the caller, preserving previously retained history.
+    chunk = "\n\n---\n\n".join(summaries)
+
     print("[compress_to_deep_memory] Payload:", {
-        "chunk": [prompt],
+        "chunk": chunk,
         "max_tokens": max_tokens,
         "previous_summary": None,
         "username": username
     })
 
     deep_summary = ai_deep_summarize_chunk(
-        prompt,
+        chunk,
         max_tokens=max_tokens,
         previous_summary=None,
         username=username

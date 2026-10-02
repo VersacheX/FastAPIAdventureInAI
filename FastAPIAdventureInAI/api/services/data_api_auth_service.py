@@ -42,7 +42,9 @@ async def perform_login(form_data: OAuth2PasswordRequestForm = Depends(), db: Se
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
-    access_token = create_access_token(data={"sub": user.username})
+    # Include the user id in the token so the AI server (which may run in WSL
+    # without SQL access) can still resolve account-level settings by id.
+    access_token = create_access_token(data={"sub": user.username, "user_id": user.id})
 
     # Persist the session token in the database with an expiry timestamp
     try:

@@ -5,9 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS
 
 # Import routers
-from api.routers import auth_router, users_router, game_ratings_router, worlds_router, deep_memory_router, tokenized_history_router, history_router, saved_games_router
+from api.routers import auth_router, users_router, game_ratings_router, worlds_router, deep_memory_router, tokenized_history_router, history_router, saved_games_router, settings_router
+from shared.services.orm_service import init_db_schema
 
 app = FastAPI()
+
+# The data server OWNS the database. Initialize the schema at startup so broken
+# connectivity, credentials, or driver problems fail loudly here rather than
+# surfacing later as per-request errors. DB-less inference servers skip this.
+init_db_schema()
 
 # CORS middleware
 app.add_middleware(
@@ -27,6 +33,7 @@ app.include_router(deep_memory_router.router)
 app.include_router(tokenized_history_router.router)
 app.include_router(history_router.router)
 app.include_router(saved_games_router.router)
+app.include_router(settings_router.router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

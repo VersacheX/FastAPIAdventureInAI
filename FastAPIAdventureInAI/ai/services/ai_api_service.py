@@ -1,6 +1,7 @@
 """
 AI helper functions for story generation and history management.
 """
+import re
 from fastapi import Request
 #from ai.ai_client_requests import ai_summarize_chunk, ai_prime_narrator, ai_generate_story
 from ai.schemas_ai_server import *
@@ -8,33 +9,133 @@ from business.models import User
 from starlette.concurrency import run_in_threadpool
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 from shared.helpers.memory_helper import get_recent_memories
-from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
+from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings, get_user_ai_settings_async
 
-    
-def flatten_json_prompt(json_data, settings, STORY_TOKENIZER):
-    """Build optimized prompt from structured game data with token budget enforcement."""
+
+def _clean_generated_text(text: str, stop_tokens=None, story_splitter: str = None) -> str:
+    """Strip model artifacts (stop tokens, chapter markers, splitter, prompt
+    echoes) from raw generation output. Pure string work -- no model call -- so
+    it can be applied to any generation (story, summary, repair) identically.
+    """
+    # Remove lines starting with any stop token
+    for stop_token in stop_tokens or "":
+        if text.strip().startswith(stop_token):
+            text = text.strip()[len(stop_token):].lstrip()
+
+    # Remove chapter markers (e.g. "Chapter 1.2.3:" or "1.2:")
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*Chapter\s+\d+\.\d+(\.\d+)?:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\s*\d+\.\d+(\.\d+)?:\s*', '', text)
+
+    # Remove story splitter if it appears in output
+    if story_splitter and story_splitter in text:
+        text = text.split(story_splitter)[-1].strip()
+
+    # Remove common prompt artifacts
+    text = re.sub(
+        r'#\s*(No player action|Current Player Action|Continue|Recent Story).*$',
+        '', text, flags=re.MULTILINE | re.IGNORECASE,
+    )
+    return text.strip()
+
+def flatten_json_prompt(json_data, settings, STORY_ENGINE):
+    """Build optimized prompt from structured game data with token budget enforcement.
+
+    DEPRECATED for the main story route: this flattens everything into a single
+    user string, which makes the model unable to tell "already-written
+    narration" from "what to continue" and causes verbatim echoing of the most
+    recent entries. Prefer build_story_messages() which uses proper chat roles.
+    Kept for backwards compatibility / other callers.
+    """
+    context_block, recent_story_block, action_block, _stats = _build_prompt_blocks(
+        json_data, settings, STORY_ENGINE
+    )
+    prompt = context_block
+    if recent_story_block:
+        prompt += f"# Recent Story:\n{recent_story_block}\n\n"
+    prompt += action_block
+    return prompt
+
+
+def build_story_messages(json_data, settings, STORY_ENGINE, system_prompt=None):
+    """Build a ChatML message list for story continuation.
+
+    Using distinct roles is what stops the model from copying the most recent
+    entries verbatim:
+      - system    : narrator rules
+      - user      : universe / player / rating + deep & compressed past events
+      - assistant : the recent story (narration the narrator already produced)
+      - user      : the player's action + an explicit "continue, don't repeat"
+
+    Because the recent story is framed as the assistant's PRIOR output, the model
+    treats the final user turn as a request for the NEXT beat rather than a
+    pattern to reproduce.
+    """
+    context_block, recent_story_block, action_block, stats = _build_prompt_blocks(
+        json_data, settings, STORY_ENGINE, system_prompt=system_prompt
+    )
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    # Setup / context as the first user turn.
+    messages.append({"role": "user", "content": context_block.strip()})
+
+    # Recent story becomes the assistant's prior narration.
+    if recent_story_block:
+        messages.append({"role": "assistant", "content": recent_story_block.strip()})
+
+    # Final user turn: the action plus an explicit continuation directive.
+    messages.append({"role": "user", "content": action_block.strip()})
+
+    final_tokens = sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
+    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3901)})")
+    print(f"[Token Budget] MEMORIES: {stats['block_tokens']} ACTIONS: {stats['action_tokens']} BASE: {stats['base_tokens']} RECENT HISTORY: {stats['entry_tokens']} SYSTEM: {stats['system_tokens']} TEMPLATE: {stats['template_overhead']}")
+
+    return messages
+
+
+def _build_prompt_blocks(json_data, settings, STORY_ENGINE, system_prompt=None):
+    """Shared budget-aware builder returning the prompt in separate blocks.
+
+    Returns (context_block, recent_story_block, action_block, stats) where
+    context_block holds universe/player/rating + ancient & compressed history,
+    recent_story_block holds the uncompressed recent entries (no header), and
+    action_block holds the player's action plus the continuation directive.
+
+    The budget reserves tokens for the system prompt (narrator directives) and
+    an estimate of the chat template's per-message overhead so the final rendered
+    prompt does not overflow the context window.
+    """
     recent_story = json_data.get("RecentStory", [])
     tokenized_history = json_data.get("TokenizedHistory", [])
     deep_memory = json_data.get("DeepMemory")  # Ultra-compressed ancient history
 
-    # Core directives and context
-    prompt = (
-        f"# Narrator Directives:\n{json_data['NarratorDirectives']}\n\n"
+    # Core context. NOTE: Narrator Directives are sent as the chat system
+    # message, so they are intentionally NOT duplicated here.
+    context_block = (
         f"# Universe: {json_data['UniverseName']}\n"
         f"{json_data['UniverseTokens']}\n\n"
-        #f"# Story Preface:\n{json_data['StoryPreface']}\n\n"
         f"# Player: {json_data['PlayerInfo']['Name']} ({json_data['PlayerInfo']['Gender']})\n"
         f"# Rating: {json_data['GameSettings']['Rating']}\n\n"
     )
-    
-    # Count tokens in base prompt
-    base_tokens = len(STORY_TOKENIZER.encode(prompt))
-    #print(f"[Token Budget] Base prompt: {base_tokens} tokens")
+
+    base_tokens = STORY_ENGINE.count_tokens(context_block)
     tokens_used = base_tokens
-    
-    # Reserve tokens for action and continuation
+
+    # Reserve budget for the system prompt plus chat-template framing overhead.
+    # Each message rendered by the chat template adds role/delimiter tokens
+    # (roughly 4 tokens per message for ChatML). We account for up to 4 messages
+    # (system/user/assistant/user) so the final rendered prompt stays within the
+    # safe limit.
+    system_tokens = STORY_ENGINE.count_tokens(system_prompt) if system_prompt else 0
+    template_overhead = 4 * 4
+    tokens_used += system_tokens + template_overhead
+
+    # Build the action / continuation block.
     current_action = json_data['CurrentAction'].strip()
-    action_text = ""
     if current_action:
         action_mode = json_data.get("ActionMode", "ACTION")
         if action_mode == "SPEECH":
@@ -44,89 +145,75 @@ def flatten_json_prompt(json_data, settings, STORY_TOKENIZER):
         else:
             action_text = f"# Player Action: {current_action}\n\n"
     else:
-        action_text = "# No Player Action. Continue the story naturally.\n\n"
-    
-    action_text += f"{json_data['GameSettings']['StorySplitter']}\n"
-    action_tokens = len(STORY_TOKENIZER.encode(action_text))
-    #print(f"[Token Budget] Action section: {action_tokens} tokens")
+        action_text = "# No Player Action.\n\n"
+
+    # Explicit continuation directive so the model advances instead of echoing.
+    action_text += (
+        "# Instruction: Continue the story from this exact moment. Write what "
+        "happens NEXT as new narration. Do NOT repeat, rephrase, or summarize "
+        "any previous entry.\n"
+    )
+    action_tokens = STORY_ENGINE.count_tokens(action_text)
     tokens_used += action_tokens
-    
-    # Calculate available budget for history
+
     available_tokens = settings.get("SAFE_PROMPT_LIMIT", 3900) - tokens_used
-    
-    #print(f"[Token Budget] Available tokens: {available_tokens}")
-    # Deep memory (ultra-compressed ancient history)
+
+    # Deep memory (ultra-compressed ancient history).
     if deep_memory and available_tokens > 0:
         deep_section = f"# Ancient History (Major Events):\n{deep_memory.strip()}\n\n"
-        deep_tokens = len(STORY_TOKENIZER.encode(deep_section))
+        deep_tokens = STORY_ENGINE.count_tokens(deep_section)
         if deep_tokens <= available_tokens:
-            prompt += deep_section
+            context_block += deep_section
             tokens_used += deep_tokens
             available_tokens -= deep_tokens
 
     total_block_tokens = 0
-    # Compressed history (if available) - just use the most recent summaries
+    # Compressed history (most recent summaries first).
     if tokenized_history and available_tokens > 0:
-        history_section = "# Past Events:\n"
-        # Start with most recent and work backwards until we run out of budget
         recent_blocks = list(reversed(tokenized_history[-settings.get("MAX_TOKENIZED_HISTORY_BLOCK", 4):]))
-        blocks_to_include = []       
-
+        blocks_to_include = []
         for block in recent_blocks:
             summary = block.get("summary", "").strip()
             if summary:
                 block_text = f"{summary}\n\n"
-                block_tokens = len(STORY_TOKENIZER.encode(block_text))
+                block_tokens = STORY_ENGINE.count_tokens(block_text)
                 if block_tokens <= available_tokens:
                     total_block_tokens += block_tokens
-                    blocks_to_include.insert(0, block_text)  # Insert at beginning to maintain order
+                    blocks_to_include.insert(0, block_text)
                     available_tokens -= block_tokens
                 else:
-                    break  # Stop if we can't fit more
-        
-        #print(f"[Token Budget] Compressed history tokens:{total_block_tokens}")
+                    break
         if blocks_to_include:
-            prompt += history_section
+            context_block += "# Past Events:\n"
             for block_text in blocks_to_include:
-                prompt += block_text
-            tokens_used = settings.get("SAFE_PROMPT_LIMIT", 3900) - available_tokens
+                context_block += block_text
 
-    #print(f"[Token Budget] After deep memory and compressed history: {tokens_used} tokens used, {available_tokens} tokens left.")
-    
     total_entry_tokens = 0
-    # Recent chronological story - also budget constrained
+    recent_story_block = ""
+    # Recent chronological story (budget constrained, most recent first).
     if recent_story and available_tokens > 0:
-        story_section = "# Recent Story:\n"
-        # Start with most recent and work backwards
         recent_entries = list(reversed(recent_story))
         entries_to_include = []
-        
         for entry in recent_entries:
             entry_text = f"{entry.strip()}\n\n"
-            entry_tokens = len(STORY_TOKENIZER.encode(entry_text))
+            entry_tokens = STORY_ENGINE.count_tokens(entry_text)
             if entry_tokens <= available_tokens:
                 total_entry_tokens += entry_tokens
-                entries_to_include.insert(0, entry_text)  # Insert at beginning to maintain order
+                entries_to_include.insert(0, entry_text)
                 available_tokens -= entry_tokens
             else:
-                break  # Stop if we can't fit more
-        #print(f"[Token Budget] Recent story entries included tokens: {total_entry_tokens}")
-        if entries_to_include:
-            prompt += story_section
-            for entry_text in entries_to_include:
-                prompt += entry_text
+                break
+        recent_story_block = "".join(entries_to_include).strip()
 
-    # Add action section (already calculated above)
-    prompt += action_text
-    
-    # Log final token count for debugging
-    final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"[Token Budget] Final prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3901) })")
-    print(f"[Token Budget] MEMORIES: {total_block_tokens} ACTIONS: {action_tokens} BASE: {base_tokens} RECENT HISTORY: {total_entry_tokens}")
-    # if(final_tokens != total_block_tokens + action_tokens + base_tokens + total_entry_tokens):
-    #     print(f"Token count mismatch detected! {final_tokens} != {total_block_tokens + action_tokens + base_tokens + total_entry_tokens}")
-
-    return prompt
+    stats = {
+        "base_tokens": base_tokens,
+        "system_tokens": system_tokens,
+        "template_overhead": template_overhead,
+        "action_tokens": action_tokens,
+        "block_tokens": total_block_tokens,
+        "entry_tokens": total_entry_tokens,
+    }
+    return context_block, recent_story_block, action_text, stats
 
 # THIS CAN STAY REMANE TO build_structured_json_from_context  ... also we should rename this file as ai_service
 def build_structured_json(context, user_input, settings=None):
@@ -253,55 +340,96 @@ def build_structured_json(context, user_input, settings=None):
 #     return summary
 
 # THIS CAN STAY
-async def perform_count_tokens(request: Request, STORY_TOKENIZER):
+async def perform_count_tokens(request: Request, STORY_ENGINE):
     """Count tokens in a single text string."""
-    import asyncio
     body = await request.json()
     text = body.get("text", "")
-    
-    tokens = STORY_TOKENIZER.encode(text)
-    return {"token_count": len(tokens)}
+
+    # count_tokens acquires the engine's synchronous model lock. Run it in a
+    # worker thread so a concurrent generation holding that lock cannot block
+    # the async event loop for the full generation duration.
+    token_count = await run_in_threadpool(STORY_ENGINE.count_tokens, text)
+    return {"token_count": token_count}
 
 # THIS CAN STAY
-async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user: User, STORY_TOKENIZER, STORY_GENERATOR):
-    prompt = request.chunk
+async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user: User, STORY_ENGINE):
+    chunk = request.chunk
     max_tokens = request.max_tokens
-    #previous_summary = request.previous_summary
+    previous_summary = request.previous_summary
 
-    settings = get_user_ai_settings(user.id)
+    # Settings resolution can block (remote HTTP fetch + DB fallback), so offload
+    # it off the event loop, same as the other migrated AI routes.
+    settings = await get_user_ai_settings_async(user.id)
     SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
     SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
 
-    prompt+=f"\n{SUMMARY_SPLIT_MARKER}"
-    # Log the token count
-    final_tokens = len(STORY_TOKENIZER.encode(prompt))
-    print(f"\n[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
-    
+    # Deep (ancient) memory compression. Like the chunk summarizer, this must use
+    # proper chat roles: the directive goes in the SYSTEM turn and the chapter
+    # summaries go in the USER turn. Previously the raw chunk was sent with no
+    # instructions at all (just a trailing marker), so the instruct model simply
+    # echoed the text back instead of compressing it.
+    system_prompt = (
+        "You are a long-term memory compressor. You are given one or more "
+        "chapter summaries describing ancient story history. Merge them into a "
+        "single, ultra-compressed record of ONLY the most important, lasting "
+        "facts: major plot outcomes, permanent world/state changes, key "
+        "character arcs and relationships, and unresolved threads.\n"
+        "Rules:\n"
+        "  - Preserve continuity across ALL provided history.\n"
+        "  - Be extremely terse; drop anything minor or transient.\n"
+        "  - Do NOT continue the story and do NOT copy sentences verbatim.\n"
+        "  - Output ONLY the merged summary as plain text, no formatting.\n"
+    )
+
+    # Include the existing deep-memory summary so a second compression does not
+    # discard previously retained ancient history -- it gets merged forward.
+    user_parts = []
+    if previous_summary:
+        user_parts.append(
+            "# Existing ancient-history summary (KEEP these facts, merge forward):\n"
+            f"{previous_summary.strip()}\n"
+        )
+    user_parts.append(
+        "# New chapter summaries to merge in:\n"
+        f"{chunk.strip()}"
+    )
+    user_content = "\n".join(user_parts)
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    # count_tokens acquires the model lock; offload the budget calc to a worker
+    # thread so it can't block the event loop behind an in-flight generation.
+    final_tokens = await run_in_threadpool(
+        lambda: sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
+    )
+    print(f"\n[Deep Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
+
     # Single attempt - accept whatever concise summary the AI produces
-    inputs = await run_in_threadpool(lambda: STORY_TOKENIZER(prompt, return_tensors="pt").to("cuda"))
-    summary_output = await run_in_threadpool(
-        lambda: STORY_GENERATOR.generate(
-            **inputs,
+    summary_text = await run_in_threadpool(
+        lambda: STORY_ENGINE.generate_messages(
+            messages,
             max_new_tokens=max_tokens,
-            num_return_sequences=1,
             temperature=0.5,
             top_p=0.90,
-            repetition_penalty=1.1
+            repetition_penalty=1.1,
         )
     )
-    summary_text = STORY_TOKENIZER.decode(summary_output[0], skip_special_tokens=True)
 
-    # Strip everything before the marker
+    # Legacy split marker: strip it if present
     if SUMMARY_SPLIT_MARKER in summary_text:
         summary_text = summary_text.split(SUMMARY_SPLIT_MARKER)[-1]
-    
+
+    # Shared artifact cleanup: stop tokens, chapter markers, prompt echoes.
+    summary_text = _clean_generated_text(summary_text, settings.get("STOP_TOKENS", ""))
     summary_text = summary_text.strip()
-    
+
     print("\n" + "="*80)
-    print("SUMMARIZE_CHUNK - AI RESPONSE (after split marker removal):")
+    print("DEEP SUMMARIZE_CHUNK - AI RESPONSE:")
     print("="*80)
     print(summary_text)
-    print(f"Token count: {len(STORY_TOKENIZER.encode(summary_text, add_special_tokens=False))}")
     print("="*80 + "\n")
 
     return {"summary": summary_text}
