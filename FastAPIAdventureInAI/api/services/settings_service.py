@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from business.models import AIDirectiveSettings
 from business.dtos import AIDirectiveSettingsDTO
 from shared.services.orm_service import get_db
-from shared.helpers.ai_settings import get_ai_settings, invalidate_settings_cache
+from shared.helpers.ai_settings import (
+    _get_ai_settings_from_db,
+    invalidate_settings_cache,
+)
 
 
 async def perform_resolve_settings(
@@ -23,8 +26,22 @@ async def perform_resolve_settings(
 
     This is what the AI server consumes. No auth so the AI server can fetch it
     freely on the trusted LAN; it contains no secrets.
+
+    Use the strict DB read (not get_ai_settings) so a database outage surfaces as
+    a 500 instead of silently returning hardcoded constants. If this endpoint
+    returned 200 with constants during an outage, the AI server would treat them
+    as a successful remote value and overwrite its stale last-known-good cache,
+    bypassing its own _remote_fallback_settings stale-cache protection.
     """
-    return get_ai_settings(db=db, settings_id=settings_id, user_id=user_id, force_reload=True)
+    try:
+        return _get_ai_settings_from_db(
+            db=db, settings_id=settings_id, user_id=user_id, force_reload=True
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Settings database unavailable: {e}",
+        )
 
 
 async def perform_get_settings(settings_id: int, db: Session = Depends(get_db)):

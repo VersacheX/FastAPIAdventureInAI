@@ -1,8 +1,15 @@
 import requests
 import jwt
 import os
+from datetime import timedelta
 from config import SECRET_KEY, ALGORITHM, AI_SERVER_URL
 from business.converters import serialize_for_json
+
+
+# Server-to-server tokens are minted fresh per request and only need to survive
+# the lifetime of a single AI call. A short expiry bounds the replay window if a
+# token is captured on the plain-HTTP LAN link.
+_AI_TOKEN_EXPIRE = timedelta(minutes=5)
 
 
 def _get_ai_auth_headers(username: str = None):
@@ -33,7 +40,10 @@ def _get_ai_auth_headers(username: str = None):
             # Non-fatal: fall back to a sub-only token (Basic settings).
             print(f"[ai_client_requests] WARNING: could not resolve user_id for '{username}': {e}")
 
-    token = jwt.encode(claims, SECRET_KEY, algorithm=ALGORITHM)
+    # Mint through the shared helper so the token carries an exp claim and cannot
+    # be replayed indefinitely as this user.
+    from shared.services.auth_service import create_access_token
+    token = create_access_token(claims, expires_delta=_AI_TOKEN_EXPIRE)
     return {"Authorization": f"Bearer {token}"}
 
 # def ai_prime_narrator(username: str = None):
