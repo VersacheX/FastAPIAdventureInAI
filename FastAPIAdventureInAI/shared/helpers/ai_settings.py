@@ -98,14 +98,19 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
     import sys
     from config import SETTINGS_REMOTE_URL
 
-    # 1. Remote fetch (AI server in WSL)
+    # 1. Remote fetch (AI server in WSL). When SETTINGS_REMOTE_URL is set this
+    # process is the DB-less inference server, so a remote failure must fall back
+    # DIRECTLY to constants. Attempting a direct DB read here would hit the
+    # hard-coded connection string and add a SQL connection timeout before
+    # returning constants anyway, violating DB-less operation.
     if SETTINGS_REMOTE_URL:
         try:
             return _get_ai_settings_from_remote(settings_id, user_id, force_reload)
         except Exception as e:
-            print(f"[ai_settings] WARNING: remote settings fetch failed: {e}", file=sys.stderr)
+            print(f"[ai_settings] WARNING: remote settings fetch failed, using constants: {e}", file=sys.stderr)
+            return _default_ai_settings()
 
-    # 2. Direct database read (data server)
+    # 2. Direct database read (data server, no remote URL configured)
     try:
         return _get_ai_settings_from_db(db, settings_id, user_id, force_reload)
     except Exception as e:

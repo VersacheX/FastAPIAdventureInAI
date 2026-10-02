@@ -189,11 +189,15 @@ async def generate_from_game(request: GenerateFromGameRequest, user=Depends(get_
     # Build a ChatML message list (system/user/assistant/user) so the recent
     # story is framed as the narrator's PRIOR output. This stops the model from
     # copying the most recent entries verbatim and makes it continue instead.
-    messages = build_story_messages(
+    # build_story_messages() makes many engine.count_tokens() calls, each of
+    # which acquires the model lock, so offload it to a worker thread to avoid
+    # blocking the event loop while another request is generating.
+    messages = await run_in_threadpool(
+        build_story_messages,
         structured_json,
         settings,
         engine,
-        system_prompt=settings.get("STORYTELLER_PROMPT"),
+        settings.get("STORYTELLER_PROMPT"),
     )
 
     # Print the full prompt to console
@@ -315,64 +319,67 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
     )
 
     # Budget the story content so system prompt + content + generation fit.
-    system_tokens = engine.count_tokens(system_prompt)
-    # ~4 tokens per message of ChatML framing across system/user turns.
-    template_overhead = 4 * 2
-    available_tokens = (
-        settings.get("SAFE_PROMPT_LIMIT", 3900)
-        - system_tokens
-        - template_overhead
-        - max_tokens
-    )
+    # All of the token counting below acquires the engine's model lock, so the
+    # entire budget construction runs in a worker thread to avoid blocking the
+    # event loop while another request is generating.
+    safe_prompt_limit = settings.get("SAFE_PROMPT_LIMIT", 3900)
 
-    # Optionally give the model the running summary as context so it doesn't
-    # repeat already-captured events.
-    context_prefix = ""
-    if previous_summary:
-        context_prefix = (
-            "# Summary so far (already captured, do NOT repeat):\n"
-            f"{previous_summary.strip()}\n\n"
+    def _build_messages():
+        system_tokens = engine.count_tokens(system_prompt)
+        # ~4 tokens per message of ChatML framing across system/user turns.
+        template_overhead = 4 * 2
+        available_tokens = safe_prompt_limit - system_tokens - template_overhead - max_tokens
+
+        # Optionally give the model the running summary as context so it doesn't
+        # repeat already-captured events.
+        context_prefix = ""
+        if previous_summary:
+            context_prefix = (
+                "# Summary so far (already captured, do NOT repeat):\n"
+                f"{previous_summary.strip()}\n\n"
+            )
+            available_tokens -= engine.count_tokens(context_prefix)
+
+        # Add chunk entries until we run out of budget.
+        chunk_text_parts = []
+        for entry in chunk:
+            entry_text = entry.strip() + "\n"
+            entry_tokens = engine.count_tokens(entry_text)
+
+            if entry_tokens <= available_tokens:
+                chunk_text_parts.append(entry_text)
+                available_tokens -= entry_tokens
+            else:
+                # If we can't fit the whole entry, truncate it.
+                if len(chunk_text_parts) == 0:
+                    words = entry.split()
+                    truncated = ""
+                    for word in words:
+                        test_text = truncated + " " + word if truncated else word
+                        test_tokens = engine.count_tokens(test_text)
+                        if test_tokens <= available_tokens:
+                            truncated = test_text
+                        else:
+                            break
+                    if truncated:
+                        chunk_text_parts.append(truncated + "...\n")
+                break
+
+        user_content = (
+            f"{context_prefix}"
+            "# Story Segment to summarize:\n"
+            f"{''.join(chunk_text_parts).strip()}"
         )
-        available_tokens -= engine.count_tokens(context_prefix)
 
-    # Add chunk entries until we run out of budget.
-    chunk_text_parts = []
-    for entry in chunk:
-        entry_text = entry.strip() + "\n"
-        entry_tokens = engine.count_tokens(entry_text)
+        built = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        built_tokens = sum(engine.count_tokens(m["content"]) for m in built)
+        return built, built_tokens
 
-        if entry_tokens <= available_tokens:
-            chunk_text_parts.append(entry_text)
-            available_tokens -= entry_tokens
-        else:
-            # If we can't fit the whole entry, truncate it.
-            if len(chunk_text_parts) == 0:
-                words = entry.split()
-                truncated = ""
-                for word in words:
-                    test_text = truncated + " " + word if truncated else word
-                    test_tokens = engine.count_tokens(test_text)
-                    if test_tokens <= available_tokens:
-                        truncated = test_text
-                    else:
-                        break
-                if truncated:
-                    chunk_text_parts.append(truncated + "...\n")
-            break
-
-    user_content = (
-        f"{context_prefix}"
-        "# Story Segment to summarize:\n"
-        f"{''.join(chunk_text_parts).strip()}"
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
-
-    final_tokens = sum(engine.count_tokens(m["content"]) for m in messages)
-    print(f"[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {settings.get('SAFE_PROMPT_LIMIT', 3900)})")
+    messages, final_tokens = await run_in_threadpool(_build_messages)
+    print(f"[Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {safe_prompt_limit})")
 
     # Single attempt - accept whatever concise summary the AI produces.
     summary_text = await run_in_threadpool(
@@ -398,7 +405,6 @@ async def summarize_chunk(request: SummarizeChunkRequest, user=Depends(get_curre
     print("SUMMARIZE_CHUNK - AI RESPONSE:")
     print("="*80)
     print(summary_text)
-    print(f"Token count: {engine.count_tokens(summary_text)}")
     print("="*80 + "\n")
 
     return {"summary": summary_text}
