@@ -5,6 +5,8 @@ Exposes the DB-backed AI settings so the AI server (which cannot reach SQL
 Server directly, e.g. running in WSL) can fetch them over HTTP, and lets the
 dev app manage them.
 """
+import logging
+
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,9 @@ from shared.helpers.ai_settings import (
     _get_ai_settings_from_db,
     invalidate_settings_cache,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 async def perform_resolve_settings(
@@ -38,9 +43,13 @@ async def perform_resolve_settings(
             db=db, settings_id=settings_id, user_id=user_id, force_reload=True
         )
     except Exception as e:
+        # This endpoint is unauthenticated, so never leak raw SQLAlchemy/ODBC
+        # error text (server, driver, database, or query details). Log it
+        # server-side and return a generic 503 instead.
+        logger.exception("[settings] /settings/resolve DB read failed")
         raise HTTPException(
             status_code=503,
-            detail=f"Settings database unavailable: {e}",
+            detail="Settings database unavailable",
         )
 
 
