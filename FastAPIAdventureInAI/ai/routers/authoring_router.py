@@ -23,6 +23,30 @@ from shared.services.auth_service import get_current_claims
 router = APIRouter(tags=["authoring"])
 
 
+# Operational bounds for client-supplied generation length. The authoring model
+# is guarded by a single lock, so an unbounded (or negative) max_new_tokens could
+# either request effectively unlimited generation or monopolize the model for the
+# full context window, starving every other authoring request.
+AUTHORING_MIN_NEW_TOKENS = 1
+AUTHORING_MAX_NEW_TOKENS = 2048
+
+
+def _clamp_max_new_tokens(requested: int, default: int) -> int:
+    """Validate and clamp a client-supplied max_new_tokens to operational bounds."""
+    value = requested if requested is not None else default
+    if value < AUTHORING_MIN_NEW_TOKENS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max_new_tokens must be >= {AUTHORING_MIN_NEW_TOKENS}",
+        )
+    if value > AUTHORING_MAX_NEW_TOKENS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max_new_tokens must be <= {AUTHORING_MAX_NEW_TOKENS}",
+        )
+    return value
+
+
 def _cleanup_generated_python_block(text: str) -> str:
     # remove markdown fences if the model outputs them
     text = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", text.strip())
@@ -261,7 +285,10 @@ async def populate_primary_story_settings(
 ):
     settings = await get_user_ai_settings_async(user.id)
 
-    max_new_tokens = request.max_new_tokens or settings.get("RESERVED_FOR_GENERATION", 900)
+    max_new_tokens = _clamp_max_new_tokens(
+        request.max_new_tokens,
+        settings.get("RESERVED_FOR_GENERATION", 900),
+    )
 
     # Hard constrain output to your desired python-literal format
     directive = (
@@ -332,18 +359,18 @@ async def task_authoring(
     settings = await get_user_ai_settings_async(user.id)
 
     # Adjust max_new_tokens based on mode
-    if request.max_new_tokens:
-        max_new_tokens = request.max_new_tokens
-    elif request.mode == "plan":
-        max_new_tokens = 600
+    if request.mode == "plan":
+        mode_default = 600
     elif request.mode == "npcs":
-        max_new_tokens = 800
+        mode_default = 800
     elif request.mode == "dialog":
-        max_new_tokens = 800
+        mode_default = 800
     elif request.mode == "tasks":
-        max_new_tokens = 1200
+        mode_default = 1200
     else:
-        max_new_tokens = 800
+        mode_default = 800
+
+    max_new_tokens = _clamp_max_new_tokens(request.max_new_tokens, mode_default)
 
     prompt = _build_mode_prompt(request.mode, request)
 

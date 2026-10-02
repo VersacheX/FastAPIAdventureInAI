@@ -13,7 +13,7 @@ import re
 from urllib import parse
 
 from business.models import User
-from shared.helpers.ai_settings import get_user_ai_settings
+from shared.helpers.ai_settings import get_user_ai_settings, get_user_ai_settings_async
 from ai.schemas_ai_server import DeepSummarizeChunkRequest
 from ai.services.ai_api_service import perform_deep_summarize_chunk
 from ai.services.ddgs_service import ddgs_search_urls
@@ -22,6 +22,7 @@ from ai.lookup_ai.services.html_store_service import save_html
 from ai.lookup_ai.query_terms import extract_query_terms
 from ai.lookup_ai.section_selector import select_sections
 from ai.lookup_ai.fetch_sources import fetch_and_extract
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +131,10 @@ async def describe_entity_ai(
     collected.sort(key=lambda x: -int(x[0]))
 
     # assemble sources into chunk with token budgeting
-    # Determine user settings
+    # Determine user settings. Settings resolution can perform a blocking remote
+    # HTTP fetch (DB-less AI server) so run it off the event loop.
     try:
-        settings = get_user_ai_settings(current_user.id) if current_user else {}
+        settings = await get_user_ai_settings_async(current_user.id) if current_user else {}
     except Exception:
         settings = {}
     safe_limit = settings.get("SAFE_PROMPT_LIMIT", 3900)
@@ -141,55 +143,60 @@ async def describe_entity_ai(
 
     # build header_text (prompt instruction passed in or default)
     prompt_instruction = prompt_instruction or "You are a concise describer."
-    user_query_line = command_prompt.strip() if command_prompt and command_prompt.strip() else name
+    user_query_line = command_prompt.strip() if command_prompt and command_prompt.strip() else (query_text or "")
     header_text = (
         f"\n\n# Describer Prompt:\n{prompt_instruction}\n\n"
         f"# User included Metadata:\n{meta_data}\n\n"
         f"User Query: {user_query_line}\n"
     )
 
-    try:
-        header_tokens = STORY_ENGINE.count_tokens(header_text)
-    except Exception:
-        header_tokens = int(len(header_text) / 4)
-
-    available_tokens = max(0, safe_limit - reserved_for_output - margin - header_tokens)
-
-    prefix = "\n\nSOURCES:\n"
-    included: List[str] = []
-    removed_sources: List[str] = []
-
-    for i, (weight, text) in enumerate(collected):
-        if not text:
-            continue
-        current_body = prefix + "\n\n---\n\n".join(included) if included else prefix
-        candidate_body = current_body + ("\n\n---\n\n" if included else "") + text
+    # Token counting acquires the model lock and can wait behind an in-flight
+    # generation. Build the whole token-budgeted chunk in a worker thread so the
+    # event loop stays free for other AI routes.
+    def _build_budgeted_chunk() -> str:
         try:
-            current_tokens = STORY_ENGINE.count_tokens(current_body)
-            candidate_tokens = STORY_ENGINE.count_tokens(candidate_body)
+            header_tokens = STORY_ENGINE.count_tokens(header_text)
         except Exception:
-            current_tokens = int(len(current_body) / 4)
-            candidate_tokens = int(len(candidate_body) / 4)
-        delta = max(0, candidate_tokens - current_tokens)
-        if delta <= available_tokens:
-            included.append(text)
-            available_tokens -= delta
-            logger.info(f"[lookup_ai_service] INCLUDED candidate #{i} now available_tokens={available_tokens}")
+            header_tokens = int(len(header_text) / 4)
+
+        available_tokens = max(0, safe_limit - reserved_for_output - margin - header_tokens)
+
+        prefix = "\n\nSOURCES:\n"
+        included: List[str] = []
+        removed_sources: List[str] = []
+
+        for i, (weight, text) in enumerate(collected):
+            if not text:
+                continue
+            current_body = prefix + "\n\n---\n\n".join(included) if included else prefix
+            candidate_body = current_body + ("\n\n---\n\n" if included else "") + text
+            try:
+                current_tokens = STORY_ENGINE.count_tokens(current_body)
+                candidate_tokens = STORY_ENGINE.count_tokens(candidate_body)
+            except Exception:
+                current_tokens = int(len(current_body) / 4)
+                candidate_tokens = int(len(candidate_body) / 4)
+            delta = max(0, candidate_tokens - current_tokens)
+            if delta <= available_tokens:
+                included.append(text)
+                available_tokens -= delta
+                logger.info(f"[lookup_ai_service] INCLUDED candidate #{i} now available_tokens={available_tokens}")
+            else:
+                removed_sources.append(_extract_url_from_text(text) or text[:120])
+
+        if included:
+            joined = "\n\n---\n\n".join(included)
+            built = prefix + joined
         else:
-            removed_sources.append(_extract_url_from_text(text) or text[:120])
+            built = (
+                "\n\nSources: None found. Use only the provided sources to answer. "
+                "If no factual information is available for this query, respond: 'No factual information available for this query.'"
+            )
 
-    if included:
-        joined = "\n\n---\n\n".join(included)
-        chunk = prefix + joined
-    else:
-        chunk = (
-            "\n\nSources: None found. Use only the provided sources to answer. "
-            "If no factual information is available for this query, respond: 'No factual information available for this query.'"
-        )
+        # final chunk includes header
+        return built + header_text
 
-    #print (removed_sources)
-    # final chunk includes header
-    chunk += header_text
+    chunk = await run_in_threadpool(_build_budgeted_chunk)
 
     print(chunk)
     # call AI

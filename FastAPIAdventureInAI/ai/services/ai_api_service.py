@@ -9,7 +9,7 @@ from business.models import User
 from starlette.concurrency import run_in_threadpool
 from config import CORS_ORIGINS, SECRET_KEY, ALGORITHM
 from shared.helpers.memory_helper import get_recent_memories
-from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings
+from shared.helpers.ai_settings import get_ai_settings, get_user_ai_settings, get_user_ai_settings_async
 
 
 def _clean_generated_text(text: str, stop_tokens=None, story_splitter: str = None) -> str:
@@ -357,7 +357,9 @@ async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user:
     max_tokens = request.max_tokens
     previous_summary = request.previous_summary
 
-    settings = get_user_ai_settings(user.id)
+    # Settings resolution can block (remote HTTP fetch + DB fallback), so offload
+    # it off the event loop, same as the other migrated AI routes.
+    settings = await get_user_ai_settings_async(user.id)
     SAFE_PROMPT_LIMIT = settings.get("SAFE_PROMPT_LIMIT", 3900)
     SUMMARY_SPLIT_MARKER = settings.get("SUMMARY_SPLIT_MARKER", "<<<SPLIT_MARKER>>>")
 
@@ -398,7 +400,11 @@ async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user:
         {"role": "user", "content": user_content},
     ]
 
-    final_tokens = sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
+    # count_tokens acquires the model lock; offload the budget calc to a worker
+    # thread so it can't block the event loop behind an in-flight generation.
+    final_tokens = await run_in_threadpool(
+        lambda: sum(STORY_ENGINE.count_tokens(m["content"]) for m in messages)
+    )
     print(f"\n[Deep Summarize Token Budget] Prompt: {final_tokens} tokens (limit: {SAFE_PROMPT_LIMIT})")
 
     # Single attempt - accept whatever concise summary the AI produces
@@ -421,10 +427,9 @@ async def perform_deep_summarize_chunk(request: DeepSummarizeChunkRequest, user:
     summary_text = summary_text.strip()
 
     print("\n" + "="*80)
-    print("SUMMARIZE_CHUNK - AI RESPONSE (after split marker removal):")
+    print("DEEP SUMMARIZE_CHUNK - AI RESPONSE:")
     print("="*80)
     print(summary_text)
-    print(f"Token count: {STORY_ENGINE.count_tokens(summary_text)}")
     print("="*80 + "\n")
 
     return {"summary": summary_text}

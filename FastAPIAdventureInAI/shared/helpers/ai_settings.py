@@ -20,6 +20,12 @@ _settings_cache = {}
 # short TTL bounds how long a cross-process settings edit can go unseen.
 _REMOTE_CACHE_TTL_SECONDS = 60
 
+# TTL (seconds) for caching a FAILED remote lookup. When the data server is
+# unreachable we briefly cache the constants fallback so that a burst of
+# inference requests does not each pay the full remote timeout (and exhaust the
+# thread pool) before giving up.
+_REMOTE_FAILURE_TTL_SECONDS = 15
+
 
 def _default_ai_settings():
     """Assemble an AI settings dict from the hardcoded constants module.
@@ -108,7 +114,7 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
             return _get_ai_settings_from_remote(settings_id, user_id, force_reload)
         except Exception as e:
             print(f"[ai_settings] WARNING: remote settings fetch failed, using constants: {e}", file=sys.stderr)
-            return _default_ai_settings()
+            return _remote_fallback_settings(settings_id, user_id)
 
     # 2. Direct database read (data server, no remote URL configured)
     try:
@@ -118,6 +124,29 @@ def get_ai_settings(db = None, settings_id: int = None, user_id: int = None, for
 
     # 3. Constants fallback
     return _default_ai_settings()
+
+
+def _remote_fallback_settings(settings_id: int = None, user_id: int = None):
+    """Resolve settings when a remote fetch has just failed.
+
+    Prefer the last successfully-fetched value for this key even if its TTL has
+    expired -- stale real settings are better than constants during a transient
+    data-server outage. If none exists, cache the constants fallback briefly so a
+    burst of requests does not each pay the full remote timeout before retrying.
+    """
+    import time
+
+    cache_key = ("remote", settings_id, user_id)
+    cached = _settings_cache.get(cache_key)
+    if cached is not None:
+        value, _expires_at = cached
+        # Keep serving (and re-arm a short TTL on) the last known-good value.
+        _settings_cache[cache_key] = (value, time.monotonic() + _REMOTE_FAILURE_TTL_SECONDS)
+        return value
+
+    fallback = _default_ai_settings()
+    _settings_cache[cache_key] = (fallback, time.monotonic() + _REMOTE_FAILURE_TTL_SECONDS)
+    return fallback
 
 
 def _get_ai_settings_from_remote(settings_id: int = None, user_id: int = None, force_reload: bool = False):
